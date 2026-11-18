@@ -10,3 +10,4 @@ workspace = true
 
 [dependencies]
 bowlingbox-score = { path = "../score" }
+rapier3d = "0.36.1"

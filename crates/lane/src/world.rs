@@ -13,7 +13,8 @@ pub trait PhysicsWorld {
 
     /// All ten pins standing and in play.
     fn reset_rack(&mut self);
-    /// A fresh world, deterministic between frames.
+    /// A fresh world, deterministic between frames. Drops pending impacts: [`crate::Lane`]
+    /// relies on that when it racks a new frame.
     fn rebuild(&mut self);
     /// Takes a pin out of the world.
     fn remove_pin(&mut self, i: usize);
