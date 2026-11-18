@@ -15,6 +15,7 @@ between their types.
 | --- | --- |
 | [`crates/score`](crates/score) | `bowlingbox-score`: the ten-pin scoring rules. |
 | [`apps/bowlingbox`](apps/bowlingbox) | `bowlingbox`: the game. |
+| [`crates/lane`](crates/lane) | `bowlingbox-lane`: the lane types, the physics trait and the throw state machine. |
 
 Libraries live in `crates/` and hold the logic. Apps live in `apps/` and only wire a library to an interface: a command line or a window. An app depends on a library, never the other way round, so each library can be tested without an interface.
 

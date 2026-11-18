@@ -24,6 +24,7 @@ cargo run -p bowlingbox
 | --- | --- |
 | [`crates/score`](crates/score) | `bowlingbox-score`: the ten-pin scoring rules. |
 | [`apps/bowlingbox`](apps/bowlingbox) | `bowlingbox`: the game. |
+| [`crates/lane`](crates/lane) | `bowlingbox-lane`: the lane types, the physics trait and the throw state machine. |
 
 `cargo bk add-crate <name>` and `cargo bk add-app <name> --console|--gui` add a row to this table and to the one in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Your own text in either file is never rewritten.
 

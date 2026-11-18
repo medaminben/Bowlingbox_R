@@ -459,6 +459,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "bowlingbox-lane"
+version = "2.0.0"
+dependencies = [
+ "bowlingbox-score",
+]
+
+[[package]]
 name = "bowlingbox-score"
 version = "2.0.0"
 
