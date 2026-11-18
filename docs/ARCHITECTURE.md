@@ -37,9 +37,10 @@ The constants `FRAMES` (10), `PINS` (10) and `ROLL_SLOTS` (21) describe the shee
 ## Dependencies
 
 - `bowlingbox-score` has no dependencies, so it builds and tests without a window or a GPU.
-- `bowlingbox` (the app) uses `bowlingbox-score` for the rules and `eframe` for the window. `eframe` runs
-  with the wgpu renderer and default features off; only `wgpu`, `default_fonts`, `wayland`, `x11` and
-  `accesskit` are on.
+- `bowlingbox` (the app) uses `bowlingbox-lane` for the throw and `bowlingbox-score` for the sheet, and
+  `eframe` for the window. `eframe` runs with the wgpu renderer and default features off; only `wgpu`,
+  `default_fonts`, `wayland`, `x11` and `accesskit` are on. The app also names `winit` to switch on
+  `wayland-csd-adwaita`, so GNOME on Wayland gets a title bar.
 - `buildkit` is a build dependency of the app. It supplies the version string that `--version` and the
   About window show.
 - `lane` will depend on `score`. `render` and `audio` will depend on neither `lane` nor each other.
