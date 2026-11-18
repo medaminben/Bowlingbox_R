@@ -16,7 +16,7 @@ pub trait PhysicsWorld {
     /// A fresh world, deterministic between frames. Drops pending impacts: [`crate::Lane`]
     /// relies on that when it racks a new frame.
     fn rebuild(&mut self);
-    /// Takes a pin out of the world.
+    /// Takes a pin out of the world and drops pending impacts.
     fn remove_pin(&mut self, i: usize);
 
     fn ball_pose(&self) -> Pose;

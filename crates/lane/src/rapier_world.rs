@@ -2,13 +2,14 @@
 //!
 //! Rapier types stay inside this module; the trait speaks `[f32; 3]` and `[f32; 4]`.
 
+use std::collections::HashSet;
 use std::sync::{Mutex, PoisonError};
 
 use rapier3d::math::{Pose as RPose, Real, Vector};
 use rapier3d::prelude::{
-    ActiveEvents, CoefficientCombineRule, ColliderBuilder, ColliderSet, CollisionEvent,
-    ContactForceEvent, ContactPair, EventHandler, PhysicsWorld as Engine, RigidBody,
-    RigidBodyBuilder, RigidBodyHandle, RigidBodySet, SharedShape, SoftBodySet, SoftBodyTearEvent,
+    ActiveEvents, CoefficientCombineRule, ColliderBuilder, ColliderHandle, ColliderSet,
+    CollisionEvent, ContactPair, EventHandler, PhysicsWorld as Engine, RigidBody, RigidBodyBuilder,
+    RigidBodyHandle, RigidBodySet, SharedShape, SoftBodySet, SoftBodyTearEvent,
 };
 
 use crate::types::{BALL_START_Z, Body, Impact, LANE, Pose};
@@ -54,7 +55,7 @@ const STATIC_RESTITUTION: f32 = 1.0;
 const PIT_RESTITUTION: f32 = 0.2;
 // Tuned on a strike map over the pocket (offset 0.02 to 0.13 m, power 0.6 to 1.0) with the
 // pin centre of mass below; C++ values in brackets.
-/// As C++: the ball skids a little before it rolls.
+/// As C++.
 const BALL_FRICTION: f32 = 0.1;
 /// [0.1] Ball-pin 0.3 · 0.7 = 0.21: the pins fly a little more, widening the pocket.
 const BALL_RESTITUTION: f32 = 0.3;
@@ -119,26 +120,48 @@ fn to_pose(p: &RPose) -> Pose {
     }
 }
 
-/// Records new contacts above the threshold, from Rapier's contact-force events.
+/// A touching pair of colliders, in a fixed order.
+type Pair = (ColliderHandle, ColliderHandle);
+
+fn pair(a: ColliderHandle, b: ColliderHandle) -> Pair {
+    if a.0 <= b.0 { (a, b) } else { (b, a) }
+}
+
+#[derive(Default)]
+struct Recorded {
+    impacts: Vec<Impact>,
+    /// Touching pairs that already had their one force event; dropped when they separate.
+    seen: HashSet<Pair>,
+}
+
+/// Records each new contact once, from the first contact-force event of a touching pair.
+///
+/// Rapier's `ContactForceEvent::started` marks the force crossing the threshold, which a
+/// continuous contact repeats whenever its force dips and rises; collision events tell when
+/// the pair separates and may report again.
 struct ImpactCollector {
     ball: RigidBodyHandle,
-    impacts: Mutex<Vec<Impact>>,
+    recorded: Mutex<Recorded>,
 }
 
 impl ImpactCollector {
-    fn take(&mut self) -> Vec<Impact> {
-        std::mem::take(
-            self.impacts
-                .get_mut()
-                .unwrap_or_else(PoisonError::into_inner),
-        )
-    }
-
-    fn clear(&mut self) {
-        self.impacts
+    fn recorded(&mut self) -> &mut Recorded {
+        self.recorded
             .get_mut()
             .unwrap_or_else(PoisonError::into_inner)
-            .clear();
+    }
+
+    fn take(&mut self) -> Vec<Impact> {
+        std::mem::take(&mut self.recorded().impacts)
+    }
+
+    /// Drops pending impacts and forgets the pairs that involve `collider`.
+    fn forget(&mut self, collider: ColliderHandle) {
+        let recorded = self.recorded();
+        recorded.impacts.clear();
+        recorded
+            .seen
+            .retain(|&(a, b)| a != collider && b != collider);
     }
 }
 
@@ -164,9 +187,13 @@ impl EventHandler for ImpactCollector {
         &self,
         _bodies: &RigidBodySet,
         _colliders: &ColliderSet,
-        _event: CollisionEvent,
+        event: CollisionEvent,
         _contact_pair: Option<&ContactPair>,
     ) {
+        if let CollisionEvent::Stopped(a, b, _) = event {
+            let mut recorded = self.recorded.lock().unwrap_or_else(PoisonError::into_inner);
+            recorded.seen.remove(&pair(a, b));
+        }
     }
 
     fn handle_contact_force_event(
@@ -177,9 +204,15 @@ impl EventHandler for ImpactCollector {
         contact_pair: &ContactPair,
         total_force_magnitude: Real,
     ) {
-        let event = ContactForceEvent::from_contact_pair(dt, contact_pair, total_force_magnitude);
         let impulse = total_force_magnitude * dt;
-        if !event.started || impulse < IMPACT_THRESHOLD {
+        if impulse < IMPACT_THRESHOLD {
+            return;
+        }
+        let mut recorded = self.recorded.lock().unwrap_or_else(PoisonError::into_inner);
+        if !recorded
+            .seen
+            .insert(pair(contact_pair.collider1, contact_pair.collider2))
+        {
             return;
         }
         let kind = |h| {
@@ -192,11 +225,10 @@ impl EventHandler for ImpactCollector {
         if (a == Body::Pin || b == Body::Pin) && ball_z < PIN_IMPACT_MIN_BALL_Z {
             return;
         }
-        let mut impacts = self.impacts.lock().unwrap_or_else(PoisonError::into_inner);
-        if impacts.len() >= MAX_IMPACTS {
+        if recorded.impacts.len() >= MAX_IMPACTS {
             return;
         }
-        impacts.push(Impact {
+        recorded.impacts.push(Impact {
             a: a.min(b),
             b: a.max(b),
             impulse,
@@ -239,7 +271,7 @@ fn surface(
         .friction_combine_rule(CoefficientCombineRule::Multiply)
         .restitution(restitution)
         .restitution_combine_rule(CoefficientCombineRule::Multiply)
-        .active_events(ActiveEvents::CONTACT_FORCE_EVENTS)
+        .active_events(ActiveEvents::CONTACT_FORCE_EVENTS | ActiveEvents::COLLISION_EVENTS)
         .contact_force_event_threshold(IMPACT_THRESHOLD / SUB_STEP)
 }
 
@@ -378,7 +410,7 @@ impl RapierWorld {
             pending: 0.0,
             collector: ImpactCollector {
                 ball,
-                impacts: Mutex::new(Vec::new()),
+                recorded: Mutex::default(),
             },
         }
     }
@@ -428,6 +460,10 @@ impl RapierWorld {
 
 impl PhysicsWorld for RapierWorld {
     fn step(&mut self, dt: f32) {
+        // Also rejects NaN, which would stop the world for good.
+        if dt.is_nan() || dt <= 0.0 {
+            return;
+        }
         self.pending += dt;
         let due = (self.pending / SUB_STEP).floor();
         self.pending -= due * SUB_STEP;
@@ -476,9 +512,13 @@ impl PhysicsWorld for RapierWorld {
         if i >= 10 || !self.in_play[i] {
             return;
         }
-        self.engine.bodies[self.pins[i]].set_enabled(false);
+        let pin = &mut self.engine.bodies[self.pins[i]];
+        pin.set_enabled(false);
+        let colliders = pin.colliders().to_vec();
         self.in_play[i] = false;
-        self.collector.clear();
+        for collider in colliders {
+            self.collector.forget(collider);
+        }
     }
 
     fn ball_pose(&self) -> Pose {

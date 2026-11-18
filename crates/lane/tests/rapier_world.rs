@@ -5,7 +5,7 @@
 use std::f32::consts::PI;
 
 use bowlingbox_lane::{
-    Body, LANE, Lane, MAX_AIM_ANGLE_DEG, MAX_AIM_OFFSET, POCKET_ANGLE_DEG, POCKET_OFFSET,
+    Body, Impact, LANE, Lane, MAX_AIM_ANGLE_DEG, MAX_AIM_OFFSET, POCKET_ANGLE_DEG, POCKET_OFFSET,
     POCKET_POWER, Phase, RapierWorld, Snapshot,
 };
 use bowlingbox_score::{ScoreCalculator, ScoreSheet, Slot};
@@ -261,4 +261,49 @@ fn slow_throw_stops_on_the_lane() {
     }
     assert_eq!(lane.snapshot().phase, Phase::FrameDone);
     assert_eq!(lane.snapshot().last_pins_down, Some(0));
+}
+
+/// Every impact of one throw, drained after each step until the lane is back in Aiming.
+fn impacts_of_throw(lane: &mut RapierLane, offset: f32, power: f32) -> Vec<Impact> {
+    launch(lane, offset, 0.0, power);
+    let mut all = Vec::new();
+    for _ in 0..60 * 60 {
+        if lane.snapshot().phase == Phase::Aiming {
+            return all;
+        }
+        lane.step(DT);
+        all.extend(lane.drain_impacts());
+    }
+    panic!("the throw did not end within a minute");
+}
+
+fn count(impacts: &[Impact], a: Body, b: Body) -> usize {
+    impacts.iter().filter(|im| im.a == a && im.b == b).count()
+}
+
+/// The ball rolls on the lane in one continuous contact: reported at most once, however its
+/// force varies.
+#[test]
+fn a_rolling_ball_reports_the_lane_once() {
+    for (offset, power) in [(0.0, 0.4), (POCKET_OFFSET, POCKET_POWER)] {
+        let mut lane = RapierLane::default();
+        let impacts = impacts_of_throw(&mut lane, offset, power);
+        assert!(
+            count(&impacts, Body::Ball, Body::Lane) <= 1,
+            "offset {offset}, power {power}: {impacts:?}"
+        );
+    }
+}
+
+/// The ball enters the pit once and stays on its floor: one floor impact (contact point at the
+/// floor top, y = -0.8), however long it rolls there. Walls are other contacts.
+#[test]
+fn a_ball_in_the_pit_reports_the_floor_once() {
+    let mut lane = RapierLane::default();
+    let impacts = impacts_of_throw(&mut lane, 0.0, 0.4);
+    let floor = impacts
+        .iter()
+        .filter(|im| im.a == Body::Ball && im.b == Body::Pit && im.position[1] < -0.79)
+        .count();
+    assert_eq!(floor, 1, "{impacts:?}");
 }
