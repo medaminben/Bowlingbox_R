@@ -3,7 +3,7 @@
 use bowlingbox_score::{Game, ScoreCalculator, ScoreSheet};
 use eframe::egui;
 
-use crate::command::{Command, command_for_key};
+use crate::command::{Command, Route, command_for_key, route};
 
 const VERSION: &str = env!("BK_VERSION_FULL");
 
@@ -58,7 +58,11 @@ impl eframe::App for App {
             })
         });
         if let Some(command) = pressed {
-            self.run(&ctx, command);
+            match route(command, self.show_about, ctx.any_popup_open()) {
+                Route::Run(command) => self.run(&ctx, command),
+                Route::CloseAbout => self.show_about = false,
+                Route::Ignore => {}
+            }
         }
 
         egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
