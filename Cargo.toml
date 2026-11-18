@@ -1,0 +1,43 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/*"]
+
+[workspace.package]
+# The version without a release tag (`X.Y.Z-dev`); tags give the real one.
+version = "2.0.0"
+edition = "2024"
+rust-version = "1.100.0"
+
+[workspace.metadata.buildkit]
+version = "0.1.0"
+first-release = "2.0.0"
+flow = "beta"
+repo = "medaminben/Bowlingbox_R"
+
+[workspace.metadata.bk.package]
+display-name = "Bowlingbox"
+main-app = "bowlingbox"
+apps = ["bowlingbox"]
+iss = "installer/bowlingbox.iss"
+desktop = "packaging/bowlingbox.desktop"
+icon = "packaging/icon.png"
+extra-files = []
+system-deps.apt = [
+  "libxkbcommon0",
+  "libwayland-client0",
+  "libx11-6",
+  "libxcursor1",
+  "libxrandr2",
+  "libxi6",
+  "libvulkan1",
+  "libgl1",
+]
+
+[workspace.dependencies]
+buildkit = { git = "https://github.com/medaminben/buildkit-rust", tag = "v0.1.0" }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }

@@ -1,0 +1,13 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run bowlingbox",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": { "args": ["build", "-p", "bowlingbox"] },
+      "args": [],
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}
