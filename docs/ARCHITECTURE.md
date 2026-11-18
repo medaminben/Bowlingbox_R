@@ -20,7 +20,7 @@ Libraries live in `crates/` and hold the logic. Apps live in `apps/` and only wi
 
 ## The score API
 
-`bowlingbox_score` has no dependencies. Its public items:
+`bowlingbox_score` has no dependencies. It exports:
 
 - `Slot`: what one roll position shows (`NotPlayed`, `Empty`, `Strike`, `Spare`, `Pins(n)`).
   `notation` and `total_notation` turn slots and totals into scoreboard text.
@@ -35,8 +35,22 @@ The constants `FRAMES` (10), `PINS` (10) and `ROLL_SLOTS` (21) describe the shee
 
 ## Dependencies
 
-Write down which crate depends on which, and why, when a dependency is not obvious from the table.
+- `bowlingbox-score` has no dependencies, so it builds and tests without a window or a GPU.
+- `bowlingbox` (the app) uses `bowlingbox-score` for the rules and `eframe` for the window. `eframe` runs
+  with the wgpu renderer and default features off; only `wgpu`, `default_fonts`, `wayland`, `x11` and
+  `accesskit` are on.
+- `buildkit` is a build dependency of the app. It supplies the version string that `--version` and the
+  About window show.
+- `lane` will depend on `score`. `render` and `audio` will depend on neither `lane` nor each other.
 
 ## Decisions
 
-Record a decision here when you make one: what you chose, what you rejected, and what would make you revisit it.
+- **Rust port of the 3D game only.** The C++ console and display apps, and the `Core` library, stay in the
+  C++ repository. Rust's `Result` replaces `Core`.
+- **Score as its own crate.** The rules need no window, GPU or audio device, so they are tested without one.
+- **eframe with the wgpu backend.** We write our own renderer instead of using Bevy. Bevy would save
+  rendering code but would impose its architecture, slow the builds and break about every three months.
+- **Rapier for physics and kira for audio.** Both arrive in later milestones. The throw is retuned, because
+  Rapier does not reproduce the C++ numbers.
+- **Separate repository, Beta flow.** `Bowlingbox_R` is public from its first commit. Features merge into
+  `Beta`, which releases `v2.0.0-beta.N`. Promoting `Beta` to `main` releases `v2.0.0`.

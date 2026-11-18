@@ -13,7 +13,7 @@ cargo test
 cargo run -p bowlingbox
 ```
 
-`cargo run -p bowlingbox -- --version` prints the version and exits. In the window, Esc and Ctrl+Q quit.
+`cargo run -p bowlingbox -- --version` prints the version and exits. In the window, Esc and Ctrl+Q quit; with the About window or a menu open, they close that first.
 
 `cargo bk version` prints the product version. `cargo bk` lists the other commands.
 

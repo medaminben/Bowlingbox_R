@@ -14,7 +14,8 @@ The game is in progress. The window opens with a menu bar, an empty central pane
 at the bottom. The lane, the ball and the pins arrive in a later version.
 
 - **Game, New Game** starts over.
-- **Game, Quit**, Esc and Ctrl+Q close the window.
+- **Game, Quit**, Esc and Ctrl+Q close the window. While the About window or a menu is open, Esc
+  and Ctrl+Q close that first.
 - **Help, About** shows the version.
 
 For how a game is scored, see [Scoring rules](scoring.md). If something does not work, see
