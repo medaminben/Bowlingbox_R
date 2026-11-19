@@ -95,8 +95,20 @@ fn same_inputs_give_identical_results() {
 #[test]
 fn second_ball_keeps_standing_pins() {
     let mut lane = RapierLane::default();
-    throw_ball(&mut lane, 0.42, 0.0, 0.4); // edge hit: partial knockdown
+    launch(&mut lane, 0.42, 0.0, 0.4); // edge hit: partial knockdown
+    for _ in 0..60 * 20 {
+        if lane.snapshot().phase == Phase::FrameDone {
+            break;
+        }
+        lane.step(DT);
+    }
+    let before = lane.snapshot();
+    assert_eq!(before.phase, Phase::FrameDone);
+    while lane.snapshot().phase == Phase::FrameDone {
+        lane.step(DT);
+    }
     let s = lane.snapshot();
+    assert_eq!(s.phase, Phase::Aiming);
     let down = s.last_pins_down.expect("a roll was scored");
     assert!(
         (1..10).contains(&down),
@@ -106,6 +118,17 @@ fn second_ball_keeps_standing_pins() {
     assert_eq!(lane.score_sheet().pins_left(), 10 - down);
     // Fallen pins were removed.
     assert_eq!(s.pin_in_play, s.pin_standing);
+    // Standing pins stay where they were.
+    for i in (0..10).filter(|&i| s.pin_standing[i]) {
+        let (a, b) = (before.pins[i].position, s.pins[i].position);
+        let moved = a
+            .iter()
+            .zip(b)
+            .map(|(a, b)| (a - b).powi(2))
+            .sum::<f32>()
+            .sqrt();
+        assert!(moved < 0.001, "pin {i} moved {moved} m: {a:?} -> {b:?}");
+    }
 }
 
 #[test]
