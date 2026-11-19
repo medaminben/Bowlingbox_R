@@ -101,8 +101,8 @@ undo the weight per texel. `Capabilities::hdr_resolve` says whether the device r
 without it a shader resolve (`resolve.wgsl`) averages the weighted samples instead. A GPU test checks
 that both give the same frame.
 
-Known deviation from C++: the translucent aim guide blends over the weighted scene, so its cyan is up
-to about 16 levels less bright at its centre than before. Drawing it after the resolve would restore
+Known deviation from C++: the translucent aim guide blends over the weighted scene, so it is up
+to about 16 of 255 levels less bright in its cyan than before. Drawing it after the resolve would restore
 that, at the cost of an extra pass and no multisampling on its edges. Where two boxes touch with exactly
 equal depth, a few edge pixels show the other surface than before; they were already z-fighting.
 

@@ -20,7 +20,7 @@ To check whether the simpler picture fixes a problem, start the program with `BO
 
 ## There is no sound
 
-Start the program from a terminal. If one line starts with `sound disabled:`, the game could not open a sound device and runs without sound. Check that your system has a working audio output (on Linux, a PulseAudio or PipeWire server, or ALSA) and start the program again. Check also that the sound is not muted (the bottom line shows `sound muted`; press M). The game remembers a muted state; see [Playing](usage.md) for where it is saved. On Linux, building from source needs the package `libasound2-dev`.
+Start the program from a terminal. If one line starts with `sound disabled:`, the game could not open a sound device and runs without sound. Check that your system has a working audio output (on Linux, a PulseAudio or PipeWire server, or ALSA) and start the program again. Check also that the sound is not muted (the bottom line shows `sound muted`; press M). The game remembers a muted state; see [Settings](settings.md) for where it is saved. On Linux, building from source needs the package `libasound2-dev`.
 
 ## The settings are not remembered
 
