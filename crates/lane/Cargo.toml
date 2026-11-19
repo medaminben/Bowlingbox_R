@@ -1,0 +1,13 @@
+[package]
+name = "bowlingbox-lane"
+version.workspace = true
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bowlingbox-score = { path = "../score" }
+rapier3d = "0.36.1"

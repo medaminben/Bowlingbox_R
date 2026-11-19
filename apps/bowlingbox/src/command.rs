@@ -1,25 +1,51 @@
-//! Window commands and the keys that trigger them. No window needed to test this.
+//! Player intents, independent of the input device, and how the window routes them.
 
-use eframe::egui::{Key, Modifiers};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// A player intent. Amounts are metres for `MoveAim` and degrees for `RotateAim`.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Command {
+    MoveAim(f32),
+    RotateAim(f32),
+    StartCharge,
+    Release,
     NewGame,
+    CycleTheme,
+    ToggleMute,
+    VolumeUp,
+    VolumeDown,
+    ToggleAmbience,
     Quit,
 }
 
-/// The command a key press maps to, if any: Esc and Ctrl+Q quit.
-pub fn command_for_key(key: Key, modifiers: Modifiers) -> Option<Command> {
-    match key {
-        Key::Escape if modifiers.is_none() => Some(Command::Quit),
-        Key::Q if modifiers.matches_exact(Modifiers::COMMAND) => Some(Command::Quit),
-        _ => None,
+/// Which part of the game handles a command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommandTarget {
+    Lane,
+    View,
+    Sound,
+    App,
+}
+
+impl Command {
+    /// The owner of the command. No wildcard arm: a new command does not compile until it has one.
+    pub fn target(self) -> CommandTarget {
+        match self {
+            Self::MoveAim(_)
+            | Self::RotateAim(_)
+            | Self::StartCharge
+            | Self::Release
+            | Self::NewGame => CommandTarget::Lane,
+            Self::CycleTheme => CommandTarget::View,
+            Self::ToggleMute | Self::VolumeUp | Self::VolumeDown | Self::ToggleAmbience => {
+                CommandTarget::Sound
+            }
+            Self::Quit => CommandTarget::App,
+        }
     }
 }
 
 /// What the window does with a command. While the About window or a menu is open, a quit key
 /// only dismisses it; the next press quits.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Route {
     Run(Command),
     CloseAbout,
@@ -40,34 +66,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn escape_quits() {
-        assert_eq!(
-            command_for_key(Key::Escape, Modifiers::NONE),
-            Some(Command::Quit)
-        );
-    }
-
-    #[test]
-    fn ctrl_q_quits() {
-        assert_eq!(
-            command_for_key(Key::Q, Modifiers::COMMAND),
-            Some(Command::Quit)
-        );
-    }
-
-    #[test]
-    fn plain_q_and_other_keys_do_nothing() {
-        assert_eq!(command_for_key(Key::Q, Modifiers::NONE), None);
-        assert_eq!(command_for_key(Key::A, Modifiers::COMMAND), None);
-        assert_eq!(command_for_key(Key::Enter, Modifiers::NONE), None);
-    }
-
-    #[test]
-    fn q_with_extra_modifiers_does_nothing() {
-        assert_eq!(
-            command_for_key(Key::Q, Modifiers::COMMAND | Modifiers::SHIFT),
-            None
-        );
+    fn every_command_has_one_owner() {
+        for command in [
+            Command::MoveAim(0.1),
+            Command::RotateAim(1.0),
+            Command::StartCharge,
+            Command::Release,
+            Command::NewGame,
+        ] {
+            assert_eq!(command.target(), CommandTarget::Lane);
+        }
+        assert_eq!(Command::CycleTheme.target(), CommandTarget::View);
+        for command in [
+            Command::ToggleMute,
+            Command::VolumeUp,
+            Command::VolumeDown,
+            Command::ToggleAmbience,
+        ] {
+            assert_eq!(command.target(), CommandTarget::Sound);
+        }
+        assert_eq!(Command::Quit.target(), CommandTarget::App);
     }
 
     #[test]

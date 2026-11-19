@@ -1,5 +1,9 @@
 mod app;
 mod command;
+mod debug_view;
+mod fixed_step;
+mod input;
+mod lane_commands;
 
 use eframe::egui;
 
