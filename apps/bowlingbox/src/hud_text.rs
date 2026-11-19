@@ -1,11 +1,6 @@
 //! The words shown to the player: hints, results, the status line and the help text. Pure
 //! functions, port of the C++ `HudText`.
 
-#![allow(
-    dead_code,
-    reason = "the HUD drawing that uses it comes in the next task"
-)]
-
 use bowlingbox_lane::{Phase, Snapshot};
 use bowlingbox_render::{THEMES, theme};
 use bowlingbox_score::{PINS, ScoreSheet, Slot};

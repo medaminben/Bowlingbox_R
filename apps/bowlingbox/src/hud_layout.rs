@@ -1,10 +1,5 @@
 //! Screen bands of the HUD: scoreboard on top, power bar, hint and result at the bottom.
 
-#![allow(
-    dead_code,
-    reason = "the HUD drawing that uses it comes in the next task"
-)]
-
 /// Share of the height for the scoreboard.
 const TOP_SHARE: f32 = 0.18;
 /// Share of the height for the power bar, hint and result.

@@ -2,7 +2,7 @@
 
 Bowlingbox is a 3D ten-pin bowling game rebuilt in Rust. It follows up
 [Bowlingbox 1.5.5](https://github.com/medaminben/Bowlingbox), the C++ version. The work is in progress
-until v2.0.0. Today the window shows the lane in 3D with a following camera, a scoreboard and a power bar, so you
+until v2.0.0. Today the window shows the lane in 3D with a following camera, with the scoreboard on top and a power bar, a hint and the throw result below it, so you
 can play a full game with the keyboard. Three themes are built in, and the game plays its sounds.
 
 ## Build and run
@@ -20,13 +20,16 @@ The 3D view uses the full render path (shadows, lane reflection,
 bloom) where the GPU supports it and the basic path otherwise; stderr then gets one `render: ...` line with the
 reason. `BOWLINGBOX_RENDER=basic` forces the basic path, `full` or no value picks the full path where supported,
 and any other value prints a warning. `BOWLINGBOX_RENDER_STATS=1` prints the GPU time of each pass about once a
-second. In the window, Esc and Ctrl+Q quit. With the About window open, either key closes it first. With a menu open,
-Esc closes the menu and Ctrl+Q does nothing.
+second. In the window, Esc and Ctrl+Q quit. With the Controls or About window open, Esc closes it first and the game keys do
+nothing; Ctrl+Q still quits. With a menu open, Esc closes the menu and Ctrl+Q does nothing.
 
 Controls: Left and Right move the ball, A and D turn the aim, hold Space to charge the throw and release it to
 throw, N starts a new game. With the mouse, move it over the lane to shift the ball, drag with the right button
 to turn the aim, and hold the left button to charge and release to throw. T changes the theme. M mutes, + and - change the volume
 (the keypad keys too), and B switches the background ambience; the Sound menu does the same. On Linux the build needs the ALSA headers (`libasound2-dev`). If no sound device opens, stderr gets one `sound disabled: ...` line and the game runs silent.
+
+The menu and the HUD use the Rubik font (SIL Open Font License); its licence is in
+[`packaging/NOTICES-extra.txt`](packaging/NOTICES-extra.txt).
 
 `cargo bk version` prints the product version. `cargo bk` lists the other commands.
 

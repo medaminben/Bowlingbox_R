@@ -2,12 +2,16 @@ mod app;
 mod cli;
 mod command;
 mod debug_view;
+mod dialogs;
 mod fixed_step;
 mod follow_camera;
+mod fonts;
+mod hud;
 mod hud_layout;
 mod hud_text;
 mod input;
 mod lane_commands;
+mod menus;
 mod scene_adapter;
 mod scoreboard;
 mod sound_control;
@@ -58,6 +62,7 @@ fn main() -> eframe::Result {
                 .wgpu_render_state
                 .as_ref()
                 .ok_or("the window has no wgpu render state")?;
+            fonts::install(&cc.egui_ctx);
             view3d::install(render_state, startup.theme, startup.render_mode, stats);
             let app = app::App::new(startup.theme, startup.debug_view, startup.mute, out);
             Ok(if stats {

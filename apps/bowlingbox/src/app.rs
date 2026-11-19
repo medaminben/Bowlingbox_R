@@ -3,16 +3,19 @@
 
 use bowlingbox_audio::AudioOutput;
 use bowlingbox_lane::{Lane, Phase, RapierWorld};
-use bowlingbox_render::{Camera, THEMES, ThemeId, next_theme, theme};
+use bowlingbox_render::{Camera, ThemeId, next_theme, theme};
 use bowlingbox_score::ScoreCalculator;
 use eframe::egui;
 
 use crate::command::{Command, CommandTarget, Route, route};
+use crate::dialogs::{self, Dialog};
 use crate::fixed_step::{self, FixedStep};
 use crate::follow_camera::FollowCamera;
+use crate::hud::{self, HudGeometry};
 use crate::input::{self, KeyLatch};
+use crate::menus::{self, MenuAction};
 use crate::sound_control::SoundControl;
-use crate::{debug_view, lane_commands, scene_adapter, view3d};
+use crate::{debug_view, hud_text, lane_commands, scene_adapter, view3d};
 
 const VERSION: &str = env!("BK_VERSION_FULL");
 
@@ -28,7 +31,8 @@ pub struct App {
     sound: SoundControl,
     /// The lane drawing of the last frame, where pointer presses count.
     canvas: Option<egui::Rect>,
-    show_about: bool,
+    /// The open dialog: the lane runs on, but its keys do not reach it.
+    dialog: Option<Dialog>,
     /// The last frame asked for no repaint: the window slept until the next input.
     idle: bool,
 }
@@ -51,7 +55,7 @@ impl App {
             out,
             sound,
             canvas: None,
-            show_about: false,
+            dialog: None,
             idle: false,
         }
     }
@@ -79,9 +83,9 @@ impl App {
     }
 
     fn dispatch(&mut self, ctx: &egui::Context, command: Command) {
-        match route(command, self.show_about, ctx.any_popup_open()) {
+        match route(command, self.dialog.is_some(), ctx.any_popup_open()) {
             Route::Run(command) => self.run(ctx, command),
-            Route::CloseAbout => self.show_about = false,
+            Route::CloseDialog => self.dialog = None,
             Route::Ignore => {}
         }
     }
@@ -121,7 +125,7 @@ impl App {
                 } => {
                     if pressed {
                         let on_canvas = self.canvas.is_some_and(|rect| rect.contains(pos));
-                        let blocked = self.show_about || ctx.any_popup_open();
+                        let blocked = self.dialog.is_some() || ctx.any_popup_open();
                         (on_canvas && !blocked)
                             .then(|| input::pointer_down(true, self.phase()))
                             .flatten()
@@ -148,7 +152,7 @@ impl App {
             )
         });
         let width = self.canvas.map_or(0.0, |rect| rect.width());
-        let free = over_canvas && !self.show_about && !ctx.any_popup_open();
+        let free = over_canvas && self.dialog.is_none() && !ctx.any_popup_open();
         let moved = input::pointer_move(dx, primary, secondary, width, self.phase());
         if let Some(command) = moved.filter(|_| free) {
             self.dispatch(ctx, command);
@@ -156,51 +160,39 @@ impl App {
     }
 
     fn menu_bar(&mut self, ui: &mut egui::Ui) {
-        egui::MenuBar::new().ui(ui, |ui| {
-            ui.menu_button("Game", |ui| {
-                if ui.button("New Game").clicked() {
-                    self.run(ui.ctx(), Command::NewGame);
-                    ui.close();
-                }
-                if ui.button("Quit").clicked() {
-                    self.run(ui.ctx(), Command::Quit);
-                    ui.close();
-                }
-            });
-            ui.menu_button("View", |ui| {
-                ui.menu_button("Theme", |ui| {
-                    let mut chosen = self.theme;
-                    for id in THEMES {
-                        ui.radio_value(&mut chosen, id, theme(id).label);
-                    }
-                    self.set_theme(chosen);
-                });
-            });
-            ui.menu_button("Sound", |ui| {
-                let settings = self.sound.settings();
-                if ui.checkbox(&mut { settings.muted }, "Mute").clicked() {
-                    self.run(ui.ctx(), Command::ToggleMute);
-                }
-                if ui.button("Volume up").clicked() {
-                    self.run(ui.ctx(), Command::VolumeUp);
-                }
-                if ui.button("Volume down").clicked() {
-                    self.run(ui.ctx(), Command::VolumeDown);
-                }
-                if ui
-                    .checkbox(&mut { settings.ambience }, "Background ambience")
-                    .clicked()
-                {
-                    self.run(ui.ctx(), Command::ToggleAmbience);
-                }
-            });
-            ui.menu_button("Help", |ui| {
-                if ui.button("About").clicked() {
-                    self.show_about = true;
-                    ui.close();
-                }
-            });
-        });
+        match menus::show(ui, self.theme, self.sound.settings()) {
+            Some(MenuAction::Command(command)) => self.dispatch(ui.ctx(), command),
+            Some(MenuAction::Theme(id)) => self.dispatch_theme(id),
+            Some(MenuAction::Controls) => self.dialog = Some(Dialog::Controls),
+            Some(MenuAction::About) => self.dialog = Some(Dialog::About),
+            None => {}
+        }
+    }
+
+    /// A theme picked in the menu; like the keys, it does nothing behind a dialog.
+    fn dispatch_theme(&mut self, id: ThemeId) {
+        if self.dialog.is_none() {
+            self.set_theme(id);
+        }
+    }
+
+    /// The 3D view in the middle band with the HUD around it, as the C++ canvas does.
+    fn hud_view(&mut self, ui: &mut egui::Ui, snapshot: &bowlingbox_lane::Snapshot) {
+        let (area, _) = ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
+        self.canvas = Some(area);
+        let geometry = HudGeometry::new(area);
+        let painter = ui.painter_at(area);
+        painter.rect_filled(area, 0.0, hud::CLEAR);
+        let mut camera = Camera::default();
+        self.follow.apply_to(&mut camera);
+        view3d::show(
+            ui,
+            geometry.middle,
+            camera,
+            &scene_adapter::to_scene(snapshot),
+            self.theme,
+        );
+        hud::draw(&painter, &geometry, snapshot, self.lane.score_sheet());
     }
 }
 
@@ -223,34 +215,25 @@ impl eframe::App for App {
 
         egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
         egui::Panel::bottom("status").show(ui, |ui| {
-            let status = debug_view::status(&snapshot, self.lane.score_sheet());
+            let status = hud_text::status(&snapshot, self.lane.score_sheet());
             ui.label(format!(
                 "{status} | Theme {} | {}",
                 theme(self.theme).label,
                 self.sound.status()
             ));
         });
-        egui::CentralPanel::default().show(ui, |ui| {
-            debug_view::scoreboard(ui, self.lane.score_sheet());
-            debug_view::power_bar(ui, &snapshot);
-            self.canvas = Some(if self.debug_view {
-                debug_view::lane(ui, &snapshot)
-            } else {
-                let mut camera = Camera::default();
-                self.follow.apply_to(&mut camera);
-                view3d::show(ui, camera, &scene_adapter::to_scene(&snapshot), self.theme)
+        if self.debug_view {
+            egui::CentralPanel::default().show(ui, |ui| {
+                debug_view::scoreboard(ui, self.lane.score_sheet());
+                debug_view::power_bar(ui, &snapshot);
+                self.canvas = Some(debug_view::lane(ui, &snapshot));
             });
-        });
-
-        if self.show_about {
-            egui::Window::new("About Bowlingbox")
-                .collapsible(false)
-                .resizable(false)
-                .open(&mut self.show_about)
-                .show(&ctx, |ui| {
-                    ui.label(format!("Bowlingbox {VERSION}"));
-                });
+        } else {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE)
+                .show(ui, |ui| self.hud_view(ui, &snapshot));
         }
+        dialogs::show(&ctx, &mut self.dialog, VERSION);
     }
 }
 

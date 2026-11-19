@@ -1,11 +1,6 @@
 //! What the scoreboard shows, without drawing: the text of each cell and the geometry of the
 //! 10-frame grid. Port of the C++ `ScoreboardLayout`, on the score crate's notation.
 
-#![allow(
-    dead_code,
-    reason = "the HUD drawing that uses it comes in the next task"
-)]
-
 use bowlingbox_score::{FRAMES, ROLL_SLOTS, ScoreSheet, frames_of, notation, total_notation};
 
 /// One frame of the board: the marks per ball box and the running total.

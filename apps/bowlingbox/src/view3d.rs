@@ -164,9 +164,8 @@ impl CallbackTrait for Frame {
     }
 }
 
-/// Fills the rest of the panel with the scene and returns its rectangle.
-pub fn show(ui: &mut egui::Ui, camera: Camera, scene: &SceneDescription, theme: ThemeId) -> Rect {
-    let (rect, _) = ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
+/// Draws the scene into `rect`.
+pub fn show(ui: &egui::Ui, rect: Rect, camera: Camera, scene: &SceneDescription, theme: ThemeId) {
     ui.painter().add(egui_wgpu::Callback::new_paint_callback(
         rect,
         Frame {
@@ -176,7 +175,6 @@ pub fn show(ui: &mut egui::Ui, camera: Camera, scene: &SceneDescription, theme: 
             rect,
         },
     ));
-    rect
 }
 
 #[cfg(test)]
