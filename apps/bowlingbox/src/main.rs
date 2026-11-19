@@ -36,6 +36,10 @@ fn main() -> eframe::Result {
     let cli = cli::Cli::parse();
     let startup = cli.startup(std::env::var("BOWLINGBOX_RENDER").ok().as_deref());
     let stats = render_stats_from_env(std::env::var("BOWLINGBOX_RENDER_STATS").ok().as_deref());
+    if let Some(reason) = &startup.capture_error {
+        eprintln!("capture failed: {reason}");
+        std::process::exit(1);
+    }
     for warning in &startup.warnings {
         eprintln!("{warning}");
     }

@@ -40,6 +40,8 @@ pub struct Startup {
     pub render_mode: RenderMode,
     /// `--capture`: where to write the screenshot.
     pub capture: Option<PathBuf>,
+    /// A capture run cannot start (an unknown screen): print `capture failed: <this>` and exit 1.
+    pub capture_error: Option<String>,
     /// Lines for stderr, each printed once at startup.
     pub warnings: Vec<String>,
 }
@@ -58,6 +60,7 @@ impl Cli {
             }),
         };
         // A capture run without a screen shows the game, and never saves settings.
+        let mut capture_error = None;
         let screen = match self
             .screen
             .as_deref()
@@ -68,7 +71,11 @@ impl Cli {
                 read_only: true,
                 ..Screen::parse(name)
                     .unwrap_or_else(|| {
-                        warnings.push(unknown_screen_message(name));
+                        if self.capture.is_some() {
+                            capture_error = Some(unknown_screen_message(name));
+                        } else {
+                            warnings.push(unknown_screen_message(name));
+                        }
                         Screen::Game
                     })
                     .state()
@@ -82,6 +89,7 @@ impl Cli {
             screen,
             render_mode: render_mode_from_env(render_env),
             capture: self.capture.clone(),
+            capture_error,
             warnings,
         }
     }
@@ -118,6 +126,7 @@ mod tests {
                 screen: ScreenState::default(),
                 render_mode: RenderMode::Full,
                 capture: None,
+                capture_error: None,
                 warnings: vec![],
             }
         );
@@ -223,6 +232,27 @@ mod tests {
         assert_eq!(startup.capture, Some(PathBuf::from("b.png")));
         assert_eq!(startup.screen.dialog, Some(crate::dialogs::Dialog::About));
         assert!(Cli::try_parse_from(["bowlingbox", "--capture"]).is_err());
+    }
+
+    #[test]
+    fn an_unknown_screen_fails_a_capture_run_and_only_warns_otherwise() {
+        let startup = parse(&["--screen=lobby", "--capture=a.png"]).startup(None);
+        assert_eq!(
+            startup.capture_error.as_deref(),
+            Some(
+                "unknown screen 'lobby'; use game, controls, about, sound-menu, theme-classic or theme-outdoor"
+            )
+        );
+        assert_eq!(startup.warnings, Vec::<String>::new());
+        let startup = parse(&["--screen=lobby"]).startup(None);
+        assert_eq!(startup.capture_error, None);
+        assert_eq!(startup.warnings.len(), 1);
+        assert_eq!(
+            parse(&["--screen=about", "--capture=a.png"])
+                .startup(None)
+                .capture_error,
+            None
+        );
     }
 
     #[test]
