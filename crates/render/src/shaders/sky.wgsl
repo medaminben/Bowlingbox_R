@@ -15,8 +15,16 @@ fn vs_sky(@builtin(vertex_index) index: u32) -> SkyOut {
     return out;
 }
 
+fn sky(in: SkyOut) -> vec3<f32> {
+    return mix(frame.sky_bottom.rgb, frame.sky_top.rgb, clamp(in.t, 0.0, 1.0));
+}
+
 @fragment
 fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
-    let c = mix(frame.sky_bottom.rgb, frame.sky_top.rgb, clamp(in.t, 0.0, 1.0));
-    return vec4(to_display(c, frame.params.z), 1.0);
+    return vec4(to_display(sky(in), frame.params.z), 1.0);
+}
+
+@fragment
+fn fs_sky_hdr(in: SkyOut) -> @location(0) vec4<f32> {
+    return vec4(sky(in), 1.0);
 }

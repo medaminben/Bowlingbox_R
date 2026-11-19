@@ -17,12 +17,13 @@ pub const DRAW_FLOATS: usize = 16 + 16 + 3 * 4;
 /// `min_uniform_buffer_offset_alignment` wgpu allows, so it suits every adapter.
 pub const DRAW_STRIDE: u64 = 256;
 
+pub const TONEMAP: &str = include_str!("../shaders/tonemap.wgsl");
 const COMMON: &str = include_str!("../shaders/common.wgsl");
 
 fn shader(device: &wgpu::Device, label: &str, body: &str) -> wgpu::ShaderModule {
     device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(label),
-        source: wgpu::ShaderSource::Wgsl(Cow::Owned(format!("{COMMON}\n{body}"))),
+        source: wgpu::ShaderSource::Wgsl(Cow::Owned(format!("{TONEMAP}\n{COMMON}\n{body}"))),
     })
 }
 
@@ -51,10 +52,27 @@ pub struct Pipelines {
     pub frame_layout: wgpu::BindGroupLayout,
     pub draw_layout: wgpu::BindGroupLayout,
     pub blit_layout: wgpu::BindGroupLayout,
+    /// The frame and draw uniforms, for every pipeline that draws the scene.
+    pub scene_layout: wgpu::PipelineLayout,
+    /// The basic path's scene pipelines, which tone map each fragment.
+    pub scene: ScenePipelines,
+    pub blit: wgpu::RenderPipeline,
+}
+
+/// The pipelines that draw the scene's geometry and sky into one colour format.
+pub struct ScenePipelines {
     pub lit: wgpu::RenderPipeline,
     pub sky: wgpu::RenderPipeline,
     pub guide: wgpu::RenderPipeline,
-    pub blit: wgpu::RenderPipeline,
+}
+
+/// Where the scene pipelines write.
+#[derive(Clone, Copy)]
+pub enum SceneOutput {
+    /// Tone mapped sRGB bytes in `SCENE_FORMAT` (basic path).
+    Display,
+    /// Linear HDR (full path).
+    Hdr(wgpu::TextureFormat),
 }
 
 /// One pipeline that draws into the scene targets.
@@ -74,6 +92,7 @@ struct ScenePass<'a> {
 fn scene_pipeline(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
+    format: wgpu::TextureFormat,
     samples: u32,
     p: &ScenePass<'_>,
 ) -> wgpu::RenderPipeline {
@@ -115,7 +134,7 @@ fn scene_pipeline(
             entry_point: Some(p.fragment),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             targets: &[Some(wgpu::ColorTargetState {
-                format: SCENE_FORMAT,
+                format,
                 blend: p.blend,
                 write_mask: wgpu::ColorWrites::ALL,
             })],
@@ -188,33 +207,27 @@ fn blit_pipeline(
     (layout, pipeline)
 }
 
-impl Pipelines {
-    /// `scene_samples` is the scene targets' sample count; `target_format` and `target_samples`
-    /// describe the caller's render pass that `paint` draws into.
+impl ScenePipelines {
     pub fn new(
         device: &wgpu::Device,
-        scene_samples: u32,
-        target_format: wgpu::TextureFormat,
-        target_samples: u32,
+        layout: &wgpu::PipelineLayout,
+        output: SceneOutput,
+        samples: u32,
     ) -> Self {
-        let frame_layout = uniform_layout(device, "frame uniforms", FRAME_FLOATS, false);
-        let draw_layout = uniform_layout(device, "draw uniforms", DRAW_FLOATS, true);
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("scene"),
-            bind_group_layouts: &[Some(&frame_layout), Some(&draw_layout)],
-            immediate_size: 0,
-        });
+        let (format, hdr) = match output {
+            SceneOutput::Display => (SCENE_FORMAT, ""),
+            SceneOutput::Hdr(format) => (format, "_hdr"),
+        };
         let lit = shader(device, "lit", include_str!("../shaders/lit.wgsl"));
         let sky = shader(device, "sky", include_str!("../shaders/sky.wgsl"));
         let guide = shader(device, "guide", include_str!("../shaders/guide.wgsl"));
-        let build = |p: &ScenePass<'_>| scene_pipeline(device, &layout, scene_samples, p);
-        let (blit_layout, blit) = blit_pipeline(device, target_format, target_samples);
+        let build = |p: &ScenePass<'_>| scene_pipeline(device, layout, format, samples, p);
         Self {
             lit: build(&ScenePass {
                 label: "lit",
                 module: &lit,
                 vertex: "vs_mesh",
-                fragment: "fs_lit",
+                fragment: &format!("fs_lit{hdr}"),
                 meshes: true,
                 cull: Some(wgpu::Face::Back),
                 depth_write: true,
@@ -225,7 +238,7 @@ impl Pipelines {
                 label: "sky",
                 module: &sky,
                 vertex: "vs_sky",
-                fragment: "fs_sky",
+                fragment: &format!("fs_sky{hdr}"),
                 meshes: false,
                 cull: None,
                 depth_write: false,
@@ -237,17 +250,42 @@ impl Pipelines {
                 label: "aim guide",
                 module: &guide,
                 vertex: "vs_mesh",
-                fragment: "fs_guide",
+                fragment: &format!("fs_guide{hdr}"),
                 meshes: true,
                 cull: None,
                 depth_write: false,
                 depth_compare: wgpu::CompareFunction::Less,
                 blend: Some(wgpu::BlendState::ALPHA_BLENDING),
             }),
-            blit,
+        }
+    }
+}
+
+impl Pipelines {
+    /// `scene_samples` is the scene targets' sample count; `target_format` and `target_samples`
+    /// describe the caller's render pass that `paint` draws into.
+    pub fn new(
+        device: &wgpu::Device,
+        scene_samples: u32,
+        target_format: wgpu::TextureFormat,
+        target_samples: u32,
+    ) -> Self {
+        let frame_layout = uniform_layout(device, "frame uniforms", FRAME_FLOATS, false);
+        let draw_layout = uniform_layout(device, "draw uniforms", DRAW_FLOATS, true);
+        let scene_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("scene"),
+            bind_group_layouts: &[Some(&frame_layout), Some(&draw_layout)],
+            immediate_size: 0,
+        });
+        let scene = ScenePipelines::new(device, &scene_layout, SceneOutput::Display, scene_samples);
+        let (blit_layout, blit) = blit_pipeline(device, target_format, target_samples);
+        Self {
             frame_layout,
             draw_layout,
             blit_layout,
+            scene_layout,
+            scene,
+            blit,
         }
     }
 }

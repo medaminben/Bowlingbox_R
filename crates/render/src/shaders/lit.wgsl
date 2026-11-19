@@ -1,6 +1,7 @@
 // The C++ lit shader's basic path (Shaders.cpp kLitBody) without shadow and reflection sampling:
 // GGX key light, hemisphere ambient, up to four point lights, distance fog, emissive materials,
-// procedural wood and ball patterns, tone mapped to sRGB here.
+// procedural wood and ball patterns. `fs_lit` (basic path) tone maps to sRGB here; `fs_lit_hdr`
+// (full path) writes linear HDR for the composite to tone map.
 
 const PI: f32 = 3.14159265;
 
@@ -134,8 +135,8 @@ fn brdf(n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, albedo: vec3<f32>, radiance: v
     return (diff + spec) * radiance * n_dot_l;
 }
 
-@fragment
-fn fs_lit(in: MeshOut) -> @location(0) vec4<f32> {
+// Linear HDR colour, before the tone map.
+fn shade(in: MeshOut) -> vec3<f32> {
     let dpx = fwidth(in.world_pos.x);
     let in_band = in.local_pos.y >= draw.band.x && in.local_pos.y <= draw.band.y;
     var base = select(draw.color.rgb, frame.band_color.rgb, in_band);
@@ -180,5 +181,15 @@ fn fs_lit(in: MeshOut) -> @location(0) vec4<f32> {
         let f = clamp((length(in.view_pos) - frame.params.x) / (frame.params.y - frame.params.x), 0.0, 1.0);
         rgb = mix(rgb, frame.fog_color.rgb, select(f, 0.5 * f, emissive));
     }
-    return vec4(to_display(rgb, frame.params.z), draw.color.a);
+    return rgb;
+}
+
+@fragment
+fn fs_lit(in: MeshOut) -> @location(0) vec4<f32> {
+    return vec4(to_display(shade(in), frame.params.z), draw.color.a);
+}
+
+@fragment
+fn fs_lit_hdr(in: MeshOut) -> @location(0) vec4<f32> {
+    return vec4(shade(in), draw.color.a);
 }

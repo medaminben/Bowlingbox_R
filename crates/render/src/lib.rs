@@ -1,5 +1,5 @@
 //! The 3D view of Bowlingbox: themes, decor layout, meshes, lighting maths, the camera, the scene
-//! description and the wgpu scene renderer (basic path).
+//! description and the wgpu scene renderer (full and basic paths).
 //!
 //! Axes follow the lane crate: +z runs down the lane, +y is up and +x is the bowler's right. The
 //! crate knows nothing of the lane crate; the app converts its types.
@@ -30,7 +30,10 @@ pub use decor::{
 pub use geometry::{
     MeshData, box_data, cone_data, cylinder_data, lathe_data, pin_data, sphere_data,
 };
-pub use gpu::{RenderMode, SceneRenderer, render_mode_from_env, render_mode_warning};
+pub use gpu::{
+    Capabilities, FullPathOptions, RenderMode, SceneRenderer, choose_path, render_mode_from_env,
+    render_mode_warning,
+};
 pub use lighting::{
     LightFrustum, SHADOW_TOP_Y, fit_light_frustum, linear_to_srgb, linear_to_srgb_vec3,
     props_in_box, reflection_box, shadow_box, srgb_to_linear, srgb_to_linear_vec3,

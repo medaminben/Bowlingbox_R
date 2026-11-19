@@ -1,9 +1,12 @@
 //! Draws the lane, pins, ball, decor, sky and aim guide into the renderer's own colour and depth
 //! targets, then copies the result into the caller's render pass.
 
+use super::RenderMode;
+use super::capabilities::{Capabilities, choose_path};
+use super::full::{FullPath, FullPathOptions};
 use super::meshes::{MeshKind, Meshes};
 use super::pipelines::{
-    DEPTH_FORMAT, DRAW_FLOATS, DRAW_STRIDE, FRAME_FLOATS, Pipelines, SCENE_FORMAT,
+    DEPTH_FORMAT, DRAW_FLOATS, DRAW_STRIDE, FRAME_FLOATS, Pipelines, SCENE_FORMAT, ScenePipelines,
 };
 use crate::camera::Camera;
 use crate::decor::{Prop, Shape, build_props};
@@ -49,7 +52,7 @@ impl DrawItem {
     }
 }
 
-/// The scene's colour and depth targets at one size.
+/// The basic path's colour and depth targets at one size.
 struct Targets {
     size: [u32; 2],
     color: wgpu::TextureView,
@@ -76,14 +79,23 @@ pub struct SceneRenderer {
     draws: Vec<DrawItem>,
     opaque_count: usize,
     targets: Option<Targets>,
+    /// The full path while it runs; `None` on the basic path.
+    full: Option<FullPath>,
+    full_options: FullPathOptions,
+    /// Why the basic path runs, without the `render: ` prefix.
+    fallback: Option<String>,
     /// The last `prepare` drew a frame; `paint` copies it.
     ready: bool,
 }
 
 impl SceneRenderer {
     /// `target_format` and `msaa_samples` describe the render pass `paint` draws into. The queue is
-    /// not needed yet; it keeps the signature egui-wgpu callbacks have at hand.
+    /// not needed yet; it keeps the signature egui-wgpu callbacks have at hand. The full path runs
+    /// when `mode` asks for it, `caps` allow it (see `choose_path`) and its pipelines build;
+    /// otherwise the basic path runs and `fallback_reason` says why.
     #[must_use]
+    // One argument per thing the caller decides; a builder would only rename them.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         device: &wgpu::Device,
         _queue: &wgpu::Queue,
@@ -91,6 +103,8 @@ impl SceneRenderer {
         msaa_samples: u32,
         geometry: SceneGeometry,
         theme_id: ThemeId,
+        mode: RenderMode,
+        caps: &Capabilities,
     ) -> Self {
         let msaa_samples = msaa_samples.max(1);
         let (scene_samples, note) = scene_samples(msaa_samples);
@@ -98,6 +112,14 @@ impl SceneRenderer {
             eprintln!("{note}");
         }
         let pipelines = Pipelines::new(device, scene_samples, target_format, msaa_samples);
+        let (full, fallback) = match choose_path(mode, caps).and_then(|()| {
+            FullPath::new(device, &pipelines, caps.hdr_msaa_samples).map_err(|error| {
+                format!("full-path pipelines failed ({error}); using the basic path")
+            })
+        }) {
+            Ok(full) => (Some(full), None),
+            Err(reason) => (None, Some(reason)),
+        };
         let frame_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("frame uniforms"),
             size: (FRAME_FLOATS * 4) as u64,
@@ -131,8 +153,39 @@ impl SceneRenderer {
             draws: Vec::new(),
             opaque_count: 0,
             targets: None,
+            full,
+            full_options: FullPathOptions::default(),
+            fallback,
             ready: false,
         }
+    }
+
+    /// The path that draws now. `Full` can turn into `Basic` at a `prepare` (see `fallback_reason`).
+    #[must_use]
+    pub fn path(&self) -> RenderMode {
+        if self.full.is_some() {
+            RenderMode::Full
+        } else {
+            RenderMode::Basic
+        }
+    }
+
+    /// Why the basic path runs, without the `render: ` prefix; `None` on the full path. A target
+    /// that fails to build at a new size switches to the basic path for good, so this can change
+    /// after `prepare`.
+    #[must_use]
+    pub fn fallback_reason(&self) -> Option<&str> {
+        self.fallback.as_deref()
+    }
+
+    /// Which full-path passes run; takes effect at the next `prepare`.
+    pub fn set_full_path_options(&mut self, options: FullPathOptions) {
+        self.full_options = options;
+    }
+
+    #[must_use]
+    pub fn full_path_options(&self) -> FullPathOptions {
+        self.full_options
     }
 
     /// Takes effect at the next `prepare`.
@@ -156,7 +209,19 @@ impl SceneRenderer {
             self.ready = false;
             return None;
         };
-        self.ensure_targets(device, size);
+        if let Some(full) = &mut self.full
+            && let Err(error) = full.ensure_targets(device, size, &self.pipelines.blit_layout)
+        {
+            self.fallback = Some(format!(
+                "offscreen targets incomplete at {}x{} ({error}); using the basic path",
+                size[0], size[1]
+            ));
+            self.full = None;
+        }
+        match &self.full {
+            Some(full) => full.write_post(queue, self.theme.exposure),
+            None => self.ensure_targets(device, size),
+        }
         let mut camera = *camera;
         camera.set_viewport(size_px[0], size_px[1]);
         queue.write_buffer(
@@ -183,11 +248,18 @@ impl SceneRenderer {
     /// Copies the last prepared frame into `pass`, filling its viewport. Draws nothing after a
     /// zero-size `prepare`.
     pub fn paint(&self, pass: &mut wgpu::RenderPass<'static>) {
-        let Some(targets) = self.targets.as_ref().filter(|_| self.ready) else {
+        if !self.ready {
+            return;
+        }
+        let group = match &self.full {
+            Some(full) => full.targets().map(|t| &t.blit_group),
+            None => self.targets.as_ref().map(|t| &t.blit_group),
+        };
+        let Some(group) = group else {
             return;
         };
         pass.set_pipeline(&self.pipelines.blit);
-        pass.set_bind_group(0, &targets.blit_group, &[]);
+        pass.set_bind_group(0, group, &[]);
         pass.draw(0..3, 0..1);
     }
 
@@ -436,6 +508,10 @@ impl SceneRenderer {
     }
 
     fn record(&self, encoder: &mut wgpu::CommandEncoder) {
+        if let Some(full) = &self.full {
+            full.record(encoder, |pass| self.draw_scene(pass, full.scene()));
+            return;
+        }
         let Some(targets) = &self.targets else {
             return;
         };
@@ -464,6 +540,11 @@ impl SceneRenderer {
             }),
             ..Default::default()
         });
+        self.draw_scene(&mut pass, &self.pipelines.scene);
+    }
+
+    /// The opaque draws, the sky behind them, then the translucent aim guide.
+    fn draw_scene(&self, pass: &mut wgpu::RenderPass<'_>, pipelines: &ScenePipelines) {
         pass.set_bind_group(0, &self.frame_group, &[]);
         let offset =
             |i: usize| u32::try_from(i as u64 * DRAW_STRIDE).expect("draw offset fits u32");
@@ -471,17 +552,17 @@ impl SceneRenderer {
             pass.set_bind_group(1, &self.draw_group, &[offset(i)]);
             self.meshes.get(self.draws[i].mesh).draw(pass);
         };
-        pass.set_pipeline(&self.pipelines.lit);
+        pass.set_pipeline(&pipelines.lit);
         for i in 0..self.opaque_count {
-            draw(&mut pass, i);
+            draw(pass, i);
         }
-        pass.set_pipeline(&self.pipelines.sky);
+        pass.set_pipeline(&pipelines.sky);
         pass.set_bind_group(1, &self.draw_group, &[0]);
         pass.draw(0..3, 0..1);
         if self.draws.len() > self.opaque_count {
-            pass.set_pipeline(&self.pipelines.guide);
+            pass.set_pipeline(&pipelines.guide);
             for i in self.opaque_count..self.draws.len() {
-                draw(&mut pass, i);
+                draw(pass, i);
             }
         }
     }

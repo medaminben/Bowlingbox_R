@@ -1,6 +1,8 @@
 //! The command line and what the app does with it at startup.
 
-use bowlingbox_render::{ThemeId, render_mode_warning, theme_from_name};
+use bowlingbox_render::{
+    RenderMode, ThemeId, render_mode_from_env, render_mode_warning, theme_from_name,
+};
 use clap::Parser;
 
 #[derive(Parser, Debug, Default)]
@@ -23,6 +25,7 @@ pub struct Cli {
 pub struct Startup {
     pub theme: ThemeId,
     pub debug_view: bool,
+    pub render_mode: RenderMode,
     /// Lines for stderr, each printed once at startup.
     pub warnings: Vec<String>,
 }
@@ -45,6 +48,7 @@ impl Cli {
         Startup {
             theme: theme_id,
             debug_view: self.debug_view,
+            render_mode: render_mode_from_env(render_env),
             warnings,
         }
     }
@@ -77,6 +81,7 @@ mod tests {
             Startup {
                 theme: ThemeId::Outdoor,
                 debug_view: false,
+                render_mode: RenderMode::Full,
                 warnings: vec![],
             }
         );
@@ -97,12 +102,12 @@ mod tests {
         let startup = parse(&["--theme=outdoor"]).startup(Some("fancy"));
         assert_eq!(
             startup.warnings,
-            ["render: unknown BOWLINGBOX_RENDER 'fancy'; using the basic path"]
+            ["render: unknown BOWLINGBOX_RENDER 'fancy'; using the full path where supported"]
         );
-        assert_eq!(
-            parse(&[]).startup(Some("BASIC")).warnings,
-            Vec::<String>::new()
-        );
+        assert_eq!(startup.render_mode, RenderMode::Full);
+        let basic = parse(&[]).startup(Some("BASIC"));
+        assert_eq!(basic.warnings, Vec::<String>::new());
+        assert_eq!(basic.render_mode, RenderMode::Basic);
     }
 
     #[test]

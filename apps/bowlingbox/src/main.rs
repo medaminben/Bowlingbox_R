@@ -11,6 +11,8 @@ mod view3d;
 
 use clap::Parser;
 use eframe::egui;
+use eframe::egui_wgpu::WgpuSetup;
+use std::sync::Arc;
 
 fn main() -> eframe::Result {
     let cli = cli::Cli::parse();
@@ -19,7 +21,7 @@ fn main() -> eframe::Result {
         eprintln!("{warning}");
     }
     let title = "Bowlingbox";
-    let options = eframe::NativeOptions {
+    let mut options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(title)
             .with_app_id("Bowlingbox")
@@ -28,6 +30,9 @@ fn main() -> eframe::Result {
         renderer: eframe::Renderer::Wgpu,
         ..Default::default()
     };
+    if let WgpuSetup::CreateNew(create_new) = &mut options.wgpu_options.wgpu_setup {
+        create_new.device_descriptor = Arc::new(view3d::device_descriptor);
+    }
     eframe::run_native(
         title,
         options,
@@ -36,7 +41,7 @@ fn main() -> eframe::Result {
                 .wgpu_render_state
                 .as_ref()
                 .ok_or("the window has no wgpu render state")?;
-            view3d::install(render_state, startup.theme);
+            view3d::install(render_state, startup.theme, startup.render_mode);
             Ok(Box::new(app::App::new(startup.theme, startup.debug_view)))
         }),
     )
