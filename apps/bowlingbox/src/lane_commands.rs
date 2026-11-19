@@ -24,7 +24,8 @@ pub fn execute<W: PhysicsWorld, G: Game>(
         | Command::VolumeUp
         | Command::VolumeDown
         | Command::ToggleAmbience
-        | Command::Quit => Ok(()),
+        | Command::Quit
+        | Command::Escape => Ok(()),
     }
 }
 

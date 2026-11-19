@@ -13,7 +13,10 @@ pub enum Command {
     VolumeUp,
     VolumeDown,
     ToggleAmbience,
+    /// Ctrl+Q: leave the game.
     Quit,
+    /// Esc: close what is open, else leave the game.
+    Escape,
 }
 
 /// Which part of the game handles a command.
@@ -38,27 +41,37 @@ impl Command {
             Self::ToggleMute | Self::VolumeUp | Self::VolumeDown | Self::ToggleAmbience => {
                 CommandTarget::Sound
             }
-            Self::Quit => CommandTarget::App,
+            Self::Quit | Self::Escape => CommandTarget::App,
         }
     }
 }
 
-/// What the window does with a command. While the About window or a menu is open, a quit key
-/// only dismisses it; the next press quits.
+/// What the window does with a command. While the Controls or About dialog is open the lane keeps
+/// running but game, theme and sound commands are dropped; Esc closes the dialog and Ctrl+Q still
+/// quits. While a menu is open, a quit key only dismisses it; the next press quits.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Route {
     Run(Command),
-    CloseAbout,
+    CloseDialog,
     /// The open menu closes itself on Esc; nothing else happens.
     Ignore,
 }
 
-pub fn route(command: Command, about_open: bool, menu_open: bool) -> Route {
+pub fn route(command: Command, dialog_open: bool, menu_open: bool) -> Route {
     match command {
-        Command::Quit if about_open => Route::CloseAbout,
-        Command::Quit if menu_open => Route::Ignore,
+        Command::Escape if dialog_open => Route::CloseDialog,
+        Command::Escape | Command::Quit if menu_open => Route::Ignore,
+        Command::Escape => Route::Run(Command::Quit),
+        Command::Release => Route::Run(Command::Release),
+        other if dialog_open && other.target() != CommandTarget::App => Route::Ignore,
         other => Route::Run(other),
     }
+}
+
+/// Whether a menu click on `command` acts. A click is an explicit choice, so it skips `route`
+/// (the menu is still open in that frame); only a dialog blocks the game items. Quit always acts.
+pub fn menu_click_allowed(command: Command, dialog_open: bool) -> bool {
+    !dialog_open || command.target() == CommandTarget::App || command == Command::Release
 }
 
 #[cfg(test)]
@@ -86,16 +99,79 @@ mod tests {
             assert_eq!(command.target(), CommandTarget::Sound);
         }
         assert_eq!(Command::Quit.target(), CommandTarget::App);
+        assert_eq!(Command::Escape.target(), CommandTarget::App);
+    }
+
+    const GAME: [Command; 9] = [
+        Command::MoveAim(0.1),
+        Command::RotateAim(1.0),
+        Command::StartCharge,
+        Command::NewGame,
+        Command::CycleTheme,
+        Command::ToggleMute,
+        Command::VolumeUp,
+        Command::VolumeDown,
+        Command::ToggleAmbience,
+    ];
+
+    #[test]
+    fn escape_closes_a_dialog_first() {
+        assert_eq!(route(Command::Escape, true, false), Route::CloseDialog);
+        assert_eq!(route(Command::Escape, true, true), Route::CloseDialog);
     }
 
     #[test]
-    fn quit_closes_the_about_window_first() {
-        assert_eq!(route(Command::Quit, true, false), Route::CloseAbout);
-        assert_eq!(route(Command::Quit, true, true), Route::CloseAbout);
+    fn ctrl_q_still_quits_with_a_dialog_open() {
+        assert_eq!(route(Command::Quit, true, false), Route::Run(Command::Quit));
     }
 
     #[test]
-    fn quit_does_not_quit_while_a_menu_is_open() {
+    fn no_game_command_reaches_the_lane_behind_a_dialog() {
+        for command in GAME {
+            assert_eq!(route(command, true, false), Route::Ignore, "{command:?}");
+        }
+    }
+
+    #[test]
+    fn a_release_always_passes_so_a_throw_never_sticks_in_charging() {
+        assert_eq!(
+            route(Command::Release, true, false),
+            Route::Run(Command::Release)
+        );
+        assert_eq!(
+            route(Command::Release, true, true),
+            Route::Run(Command::Release)
+        );
+    }
+
+    #[test]
+    fn menu_clicks_bypass_the_popup_route() {
+        // The menu is still open in the click frame; Quit must act.
+        assert!(menu_click_allowed(Command::Quit, false));
+        assert!(menu_click_allowed(Command::Quit, true));
+        for command in GAME {
+            assert!(menu_click_allowed(command, false), "{command:?}");
+        }
+    }
+
+    #[test]
+    fn menu_clicks_on_game_items_do_nothing_behind_a_dialog() {
+        for command in GAME {
+            assert!(!menu_click_allowed(command, true), "{command:?}");
+        }
+    }
+
+    #[test]
+    fn escape_quits_when_nothing_is_open() {
+        assert_eq!(
+            route(Command::Escape, false, false),
+            Route::Run(Command::Quit)
+        );
+    }
+
+    #[test]
+    fn a_quit_key_does_not_quit_while_a_menu_is_open() {
+        assert_eq!(route(Command::Escape, false, true), Route::Ignore);
         assert_eq!(route(Command::Quit, false, true), Route::Ignore);
     }
 
@@ -105,9 +181,8 @@ mod tests {
             route(Command::Quit, false, false),
             Route::Run(Command::Quit)
         );
-        assert_eq!(
-            route(Command::NewGame, true, true),
-            Route::Run(Command::NewGame)
-        );
+        for command in GAME {
+            assert_eq!(route(command, false, true), Route::Run(command));
+        }
     }
 }

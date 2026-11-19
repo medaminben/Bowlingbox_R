@@ -26,5 +26,5 @@ fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_sky_hdr(in: SkyOut) -> @location(0) vec4<f32> {
-    return vec4(sky(in), 1.0);
+    return vec4(resolve_weight(sky(in)), 1.0);
 }

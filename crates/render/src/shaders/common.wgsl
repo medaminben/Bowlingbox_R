@@ -41,7 +41,8 @@ struct MeshIn {
 }
 
 struct MeshOut {
-    @builtin(position) clip: vec4<f32>,
+    // Invariant: the depth pass and the lit pass must compute the same depth (Equal test).
+    @builtin(position) @invariant clip: vec4<f32>,
     @location(0) normal: vec3<f32>,
     @location(1) world_pos: vec3<f32>,
     @location(2) local_pos: vec3<f32>,

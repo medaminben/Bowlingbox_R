@@ -11,7 +11,7 @@ use super::pipelines::{
 use super::stats::{GpuTimer, TimedPass, stats_unsupported_line};
 use super::targets::FrameSizes;
 use crate::camera::Camera;
-use crate::decor::{Prop, Shape, build_props};
+use crate::decor::{Aabb, Prop, Shape, build_props, local_bounds};
 use crate::lighting::{
     LightFrustum, fit_light_frustum, props_in_box, reflection_box, shadow_box, srgb_to_linear_vec3,
 };
@@ -111,6 +111,9 @@ pub struct SceneRenderer {
     /// Index of the first prop in `draws`; everything before it casts a shadow.
     prop_start: usize,
     opaque_count: usize,
+    /// The opaque draws' indices front to back from the camera: the main pass's order, which
+    /// keeps the depth pass's own overdraw low.
+    opaque_order: Vec<usize>,
     targets: Option<Targets>,
     /// The full path while it runs; `None` on the basic path.
     full: Option<FullPath>,
@@ -150,9 +153,9 @@ impl SceneRenderer {
         }
         let pipelines = Pipelines::new(device, scene_samples, target_format, msaa_samples);
         let (full, fallback) = match choose_path(mode, caps).and_then(|()| {
-            FullPath::new(device, &pipelines, caps.hdr_msaa_samples).map_err(|error| {
-                format!("full-path pipelines failed ({error}); using the basic path")
-            })
+            FullPath::new(device, &pipelines, caps.hdr_msaa_samples, caps.hdr_resolve).map_err(
+                |error| format!("full-path pipelines failed ({error}); using the basic path"),
+            )
         }) {
             Ok(full) => (Some(full), None),
             Err(reason) => (None, Some(reason)),
@@ -185,6 +188,7 @@ impl SceneRenderer {
             draws: Vec::new(),
             prop_start: 0,
             opaque_count: 0,
+            opaque_order: Vec::new(),
             targets: None,
             full,
             full_max_side: caps.max_texture_2d,
@@ -339,6 +343,7 @@ impl SceneRenderer {
             );
         }
         self.collect_draws(scene);
+        self.sort_opaque(camera.eye);
         self.ensure_draw_capacity(device);
         queue.write_buffer(
             &self.draw_buffer,
@@ -500,8 +505,8 @@ impl SceneRenderer {
         )
     }
 
-    /// Lane, gutters, gutter walls, standing pins and the ball, then the props (the large near
-    /// surfaces first, so the depth test rejects most hidden prop fragments), then the aim guide.
+    /// Lane, gutters, gutter walls, standing pins and the ball, then the props, then the aim
+    /// guide. The main pass draws the opaque ones in `opaque_order`.
     fn collect_draws(&mut self, scene: &SceneDescription) {
         let t = self.theme;
         let g = self.geometry;
@@ -598,6 +603,25 @@ impl SceneRenderer {
                 fog: false,
                 lane: false,
             });
+        }
+    }
+
+    fn sort_opaque(&mut self, eye: Vec3) {
+        let boxes: Vec<Aabb> = self.draws[..self.opaque_count]
+            .iter()
+            .map(|d| self.mesh_box(d.mesh).transformed(d.model))
+            .collect();
+        self.opaque_order = front_to_back(eye, &boxes);
+    }
+
+    /// The local box of a draw's mesh.
+    fn mesh_box(&self, mesh: MeshKind) -> Aabb {
+        match mesh {
+            MeshKind::Shape(shape) => local_bounds(shape, &self.geometry),
+            MeshKind::Ball => Aabb {
+                min: Vec3::splat(-self.geometry.ball_radius),
+                max: Vec3::splat(self.geometry.ball_radius),
+            },
         }
     }
 
@@ -713,11 +737,16 @@ impl SceneRenderer {
         self.meshes.get(self.draws[i].mesh).draw(pass);
     }
 
-    /// The opaque draws, the sky behind them, then the translucent aim guide.
+    /// The opaque draws' depth, then the same draws shaded where they are nearest (each sample
+    /// once), the sky behind them, then the translucent aim guide.
     fn draw_scene(&self, pass: &mut wgpu::RenderPass<'_>, pipelines: &ScenePipelines) {
         pass.set_bind_group(0, &self.frame_group, &[]);
+        pass.set_pipeline(&pipelines.depth);
+        for &i in &self.opaque_order {
+            self.draw(pass, i);
+        }
         pass.set_pipeline(&pipelines.lit);
-        for i in 0..self.opaque_count {
+        for &i in &self.opaque_order {
             self.draw(pass, i);
         }
         pass.set_pipeline(&pipelines.sky);
@@ -780,6 +809,18 @@ fn draw_buffers(
     (buffer, group)
 }
 
+/// Indices into `boxes` by the distance from `eye` to each box's nearest point, nearest first;
+/// equally near boxes keep their order.
+fn front_to_back(eye: Vec3, boxes: &[Aabb]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..boxes.len()).collect();
+    order.sort_by(|&a, &b| {
+        boxes[a]
+            .distance_to(eye)
+            .total_cmp(&boxes[b].distance_to(eye))
+    });
+    order
+}
+
 /// Inverse transpose of the model's 3x3; identity for a matrix that cannot be inverted (a
 /// zero scale), whose normals do not matter.
 fn normal_matrix(model: Mat4) -> Mat3 {
@@ -829,6 +870,56 @@ mod tests {
         let (samples, note) = scene_samples(8);
         assert_eq!(samples, 4);
         assert!(note.is_some_and(|n| n.contains("8x")));
+    }
+
+    fn cube(centre: Vec3, half: f32) -> Aabb {
+        Aabb {
+            min: centre - Vec3::splat(half),
+            max: centre + Vec3::splat(half),
+        }
+    }
+
+    #[test]
+    fn opaque_draws_go_front_to_back_from_the_eye() {
+        let eye = Vec3::new(0.0, 1.0, -2.0);
+        let boxes = [
+            cube(Vec3::new(0.0, 1.0, 10.0), 0.5),
+            cube(Vec3::new(0.0, 1.0, 2.0), 0.5),
+            // A large box whose nearest side is close although its centre is far.
+            Aabb {
+                min: Vec3::new(-1.0, 0.0, -1.0),
+                max: Vec3::new(1.0, 0.5, 30.0),
+            },
+            cube(Vec3::new(3.0, 1.0, 5.0), 0.5),
+        ];
+        assert_eq!(front_to_back(eye, &boxes), vec![2, 1, 3, 0]);
+    }
+
+    #[test]
+    fn equally_near_draws_keep_their_order() {
+        let eye = Vec3::ZERO;
+        let around = Aabb {
+            min: Vec3::splat(-1.0),
+            max: Vec3::splat(1.0),
+        };
+        let far = cube(Vec3::new(0.0, 0.0, 5.0), 0.5);
+        assert_eq!(
+            front_to_back(eye, &[far, around, around, far]),
+            vec![1, 2, 0, 3]
+        );
+    }
+
+    #[test]
+    fn a_draw_box_is_its_mesh_box_through_the_model() {
+        let model = Mat4::from_scale_rotation_translation(
+            Vec3::new(2.0, 1.0, 4.0),
+            Quat::IDENTITY,
+            Vec3::new(1.0, 0.0, 0.0),
+        );
+        let local = cube(Vec3::ZERO, 0.5);
+        let b = local.transformed(model);
+        assert_eq!(b.min, Vec3::new(0.0, -0.5, -2.0));
+        assert_eq!(b.max, Vec3::new(2.0, 0.5, 2.0));
     }
 
     #[test]

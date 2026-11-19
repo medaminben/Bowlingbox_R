@@ -18,6 +18,8 @@ pub struct Capabilities {
     /// The HDR main pass's sample count: 4, 2 or 1, the highest that both `Rgba16Float` and the
     /// depth format support; 0 when `Rgba16Float` cannot be rendered to and sampled.
     pub hdr_msaa_samples: u32,
+    /// `Rgba16Float` has a hardware MSAA resolve; without it a shader resolves the main pass.
+    pub hdr_resolve: bool,
     /// The device's `max_texture_dimension_2d`.
     pub max_texture_2d: u32,
     /// The device has `TIMESTAMP_QUERY`.
@@ -44,11 +46,13 @@ impl Capabilities {
                 format.guaranteed_format_features(features)
             }
         };
+        let hdr = format_features(HDR_FORMAT);
         Self {
             hdr_msaa_samples: on_backend(
                 adapter.get_info().backend,
-                hdr_samples(format_features(HDR_FORMAT), format_features(DEPTH_FORMAT)),
+                hdr_samples(hdr, format_features(DEPTH_FORMAT)),
             ),
+            hdr_resolve: hdr_resolve(hdr),
             max_texture_2d: device.limits().max_texture_dimension_2d,
             timestamp_query: features.contains(wgpu::Features::TIMESTAMP_QUERY),
         }
@@ -64,6 +68,12 @@ fn on_backend(backend: wgpu::Backend, samples: u32) -> u32 {
     } else {
         samples
     }
+}
+
+fn hdr_resolve(color: wgpu::TextureFormatFeatures) -> bool {
+    color
+        .flags
+        .contains(wgpu::TextureFormatFeatureFlags::MULTISAMPLE_RESOLVE)
 }
 
 /// The highest of 4, 2 and 1 samples both formats support; 0 when the colour format cannot be a
@@ -174,6 +184,16 @@ mod tests {
         assert_eq!(on_backend(wgpu::Backend::Gl, 4), 1);
         assert_eq!(on_backend(wgpu::Backend::Gl, 0), 0);
         assert_eq!(on_backend(wgpu::Backend::Vulkan, 4), 4);
+    }
+
+    #[test]
+    fn the_hardware_resolve_needs_the_format_flag() {
+        let x4 = Flags::MULTISAMPLE_X4;
+        assert!(!hdr_resolve(features(SAMPLED_TARGET, x4)));
+        assert!(hdr_resolve(features(
+            SAMPLED_TARGET,
+            x4.union(Flags::MULTISAMPLE_RESOLVE)
+        )));
     }
 
     #[test]

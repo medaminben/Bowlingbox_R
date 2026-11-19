@@ -1,7 +1,7 @@
 ---
 title: Playing
 order: 2
-summary: Start the game.
+summary: Start the game, throw and use the menus.
 ---
 
 ## Starting the game
@@ -11,9 +11,11 @@ Start Bowlingbox from its entry in your applications menu, or run `bowlingbox` i
 ## Where the game stands
 
 The window shows the lane in 3D from behind the foul line, with a cyan guide for your aim. The camera
-follows the ball down the lane and returns when the throw is over. Above the lane are the scoreboard with
-ten frames and a power bar. The bottom line shows the phase of the throw, your score, the pins of the last
-throw, the theme and the sound (`volume 80 %` or `sound muted`).
+follows the ball down the lane and returns when the throw is over. Above the lane is the scoreboard with
+ten frames and the total. Below it are the power bar, a hint for the current phase and the result of the
+last throw (`STRIKE!`, `SPARE!`, `Gutter` or the number of pins). The bottom line shows the phase of the
+throw, your score, the pins standing, the theme and the sound (`volume 80 %` or `sound muted`). All of it
+scales with the window.
 
 ## Themes
 
@@ -54,19 +56,31 @@ and hold the left button to charge and release it to throw.
 The game plays the rolling ball, the pins, a tone while you charge, a sound for strikes and spares, and a
 background loop for each theme. M mutes. + and - change the volume in steps of 10 %, and changing the volume
 also unmutes. B switches the background loop on or off; the other sounds stay on. The same choices are in the
-**Sound** menu. The settings last for this session. To start without sound, run `bowlingbox --mute`.
-
-If no sound device can be opened, the game runs without sound and prints one line that starts with
-`sound disabled:` in the terminal.
+**Sound** menu. To start without sound, run `bowlingbox --mute`. See [Settings](settings.md) for what the
+game remembers.
 
 ## Menus
 
-- **Game, New Game** starts over.
-- **Game, Quit** closes the window. So do Esc and Ctrl+Q. While the About window is open, either key
-  closes it first. While a menu is open, Esc closes the menu and Ctrl+Q does nothing.
+- **Game, New Game** (Ctrl+N) starts over.
+- **Game, Quit** (Ctrl+Q) closes the window. So does Esc. While the Controls or About window is open,
+  Esc closes it first and Ctrl+Q still quits. While a menu is open, Esc closes the menu and Ctrl+Q does
+  nothing.
 - **View, Theme** picks the theme; the current one is marked.
 - **Sound** has Mute, Volume up, Volume down and Background ambience; the first and last are checked while on.
-- **Help, About** shows the version.
+  Volume up is greyed out at 100 % and Volume down at 0 %.
+- **Help, Controls** lists every key and mouse action. **Help, About** shows the version.
 
-For how a game is scored, see [Scoring rules](scoring.md). If something does not work, see
+While the Controls or About window is open, the lane keeps running but the game keys (move, aim, throw,
+new game, theme and sound) do nothing until you close it.
+
+## For contributors
+
+`bowlingbox --screen=<name>` opens the window in a named state without any input, so a screenshot tool can
+capture it: `game` (the default), `controls`, `about`, `sound-menu` (the Sound menu shown open),
+`theme-classic` and `theme-outdoor`. It changes nothing else. An unknown name prints
+`unknown screen '<name>'; use game, controls, about, sound-menu, theme-classic or theme-outdoor` and the game
+starts normally. A theme screen wins over `--theme`. A run with `--screen` (any name) never saves settings.
+
+For how a game is scored, see [Scoring rules](scoring.md). For what the game remembers, see
+[Settings](settings.md). If something does not work, see
 [Troubleshooting](troubleshooting.md).

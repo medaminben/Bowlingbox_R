@@ -2,6 +2,7 @@ use bowlingbox_render::{Capabilities, RenderMode, choose_path};
 
 const CAPABLE: Capabilities = Capabilities {
     hdr_msaa_samples: 4,
+    hdr_resolve: true,
     max_texture_2d: 8192,
     timestamp_query: false,
 };

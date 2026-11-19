@@ -4,7 +4,8 @@
 
 use super::capabilities::{HDR_FORMAT, catch_errors};
 use super::pipelines::{
-    Pipelines, SCENE_FORMAT, SceneOutput, ScenePipelines, TONEMAP, mirror_pipeline, shadow_pipeline,
+    Pipelines, SCENE_FORMAT, SceneOutput, ScenePipelines, TONEMAP, WEIGHT, mirror_pipeline,
+    shadow_pipeline,
 };
 use super::stats::{PassWrites, TimedPass};
 use super::targets::{BLOOM_LEVELS, FrameSizes, HdrTargets, Reflection, ShadowMap, TargetLayouts};
@@ -37,6 +38,9 @@ impl Default for FullPathOptions {
 
 pub struct FullPath {
     samples: u32,
+    /// The main pass resolves its samples into `resolved` itself; otherwise the `resolve` pipeline
+    /// does.
+    hardware_resolve: bool,
     /// Draws the scene into the HDR target; the lit pipeline samples the shadow map (group 2) and
     /// the reflection (group 3).
     scene: ScenePipelines,
@@ -127,7 +131,7 @@ impl BloomPipelines {
                 blend,
             )
         };
-        let down = include_str!("../shaders/bloom_down.wgsl");
+        let down = &format!("{WEIGHT}\n{}", include_str!("../shaders/bloom_down.wgsl"));
         let add = wgpu::BlendComponent {
             src_factor: wgpu::BlendFactor::One,
             dst_factor: wgpu::BlendFactor::One,
@@ -199,12 +203,19 @@ fn texture_entry(binding: u32, multisampled: bool) -> wgpu::BindGroupLayoutEntry
 }
 
 impl FullPath {
-    /// Builds the full path's pipelines for `samples` (1, 2 or 4) in the main pass.
+    /// Builds the full path's pipelines for `samples` (1, 2 or 4) in the main pass, which resolves
+    /// them itself when `hardware_resolve` (the HDR format supports it) and otherwise leaves that
+    /// to a shader.
     ///
     /// # Errors
     ///
     /// wgpu's error, on one line, when a pipeline fails to build.
-    pub fn new(device: &wgpu::Device, pipelines: &Pipelines, samples: u32) -> Result<Self, String> {
+    pub fn new(
+        device: &wgpu::Device,
+        pipelines: &Pipelines,
+        samples: u32,
+        hardware_resolve: bool,
+    ) -> Result<Self, String> {
         catch_errors(device, || {
             let shadow_layout = ShadowMap::layout(device);
             let sampled_layout = Reflection::layout(device);
@@ -244,7 +255,10 @@ impl FullPath {
                 device,
                 "composite",
                 &composite_layout,
-                format!("{TONEMAP}\n{}", include_str!("../shaders/composite.wgsl")),
+                format!(
+                    "{TONEMAP}\n{WEIGHT}\n{}",
+                    include_str!("../shaders/composite.wgsl")
+                ),
                 "fs_composite",
                 SCENE_FORMAT,
                 None,
@@ -257,6 +271,7 @@ impl FullPath {
             });
             Self {
                 samples,
+                hardware_resolve,
                 scene,
                 shadow,
                 shadow_map,
@@ -388,37 +403,10 @@ impl FullPath {
             });
             mirrored(&mut pass, &self.mirror);
         }
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("hdr main"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: t.msaa.as_ref().unwrap_or(&t.resolved),
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &t.depth,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Discard,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: at(TimedPass::Main, true, true),
-                ..Default::default()
-            });
-            // Bound even when the passes are off: the lit pipeline's layout has the groups.
-            pass.set_bind_group(2, &self.shadow_map.group, &[]);
-            pass.set_bind_group(3, &t.reflection.group, &[]);
-            draw(&mut pass);
-        }
+        let hardware_resolve = self.record_main(encoder, t, draw, at(TimedPass::Main, true, true));
         // The post time runs from the first of these passes to the end of the composite.
         let mut post_start = at(TimedPass::Post, true, false);
-        if let Some(group) = &t.resolve_group {
+        if let Some(group) = t.resolve_group.as_ref().filter(|_| !hardware_resolve) {
             let writes = post_start.take();
             post_pass(
                 encoder,
@@ -440,6 +428,50 @@ impl FullPath {
             &t.composite_group,
             at(TimedPass::Post, post_start.is_some(), true),
         );
+    }
+
+    /// The main pass, which `draw` fills; true when it also resolved its samples into
+    /// `t.resolved`.
+    fn record_main(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        t: &HdrTargets,
+        draw: impl FnOnce(&mut wgpu::RenderPass<'_>),
+        writes: Option<wgpu::RenderPassTimestampWrites<'_>>,
+    ) -> bool {
+        // The samples stay only for the shader resolve.
+        let hardware_resolve = t.msaa.is_some() && self.hardware_resolve;
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("hdr main"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: t.msaa.as_ref().unwrap_or(&t.resolved),
+                depth_slice: None,
+                resolve_target: hardware_resolve.then_some(&t.resolved),
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: if hardware_resolve {
+                        wgpu::StoreOp::Discard
+                    } else {
+                        wgpu::StoreOp::Store
+                    },
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &t.depth,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Discard,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: writes,
+            ..Default::default()
+        });
+        // Bound even when the passes are off: the lit pipeline's layout has the groups.
+        pass.set_bind_group(2, &self.shadow_map.group, &[]);
+        pass.set_bind_group(3, &t.reflection.group, &[]);
+        draw(&mut pass);
+        hardware_resolve
     }
 
     /// C++ `PostChain::present`'s bloom: the bright part into the first level, down the chain,
@@ -525,7 +557,7 @@ mod tests {
             return;
         };
         let pipelines = Pipelines::new(&device, 1, wgpu::TextureFormat::Rgba8UnormSrgb, 1);
-        let mut full = FullPath::new(&device, &pipelines, 1).expect("full-path pipelines");
+        let mut full = FullPath::new(&device, &pipelines, 1, false).expect("full-path pipelines");
         let mut ensure = |view| {
             full.ensure_targets(&device, FrameSizes::new(view), &pipelines.blit_layout)
                 .expect("targets");

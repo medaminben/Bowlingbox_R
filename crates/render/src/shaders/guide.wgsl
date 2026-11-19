@@ -9,5 +9,6 @@ fn fs_guide(in: MeshOut) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_guide_hdr(in: MeshOut) -> @location(0) vec4<f32> {
-    return vec4(draw.color.rgb * draw.band.w, draw.color.a);
+    // Blended over the weighted scene (weight.wgsl) in weighted form.
+    return vec4(resolve_weight(draw.color.rgb * draw.band.w), draw.color.a);
 }

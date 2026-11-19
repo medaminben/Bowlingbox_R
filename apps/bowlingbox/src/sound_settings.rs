@@ -53,7 +53,8 @@ impl SoundSettings {
             | Command::Release
             | Command::NewGame
             | Command::CycleTheme
-            | Command::Quit => {}
+            | Command::Quit
+            | Command::Escape => {}
         }
         next
     }

@@ -89,9 +89,26 @@ The full path runs these passes each frame:
 
 1. Shadow: a 1024x4096 depth map from the key light, fitted to the shadow box.
 2. Reflection: the scene mirrored in the lane plane at half resolution, sampled by the main lane only.
-3. Main: the scene into an `Rgba16Float` target with up to 4x MSAA.
-4. Post: the MSAA resolve, a 4-level bloom (bright part, down, up), then ACES tone mapping with the
-   theme's exposure into an 8-bit target.
+3. Main: the scene into an `Rgba16Float` target with up to 4x MSAA. A depth pre-pass writes depth only;
+   the lit pass then tests `Equal` against it, so each pixel is lit once. The opaque draws are sorted
+   front to back first. At the end of the pass the hardware resolves the MSAA samples.
+4. Post: a 4-level bloom (bright part, down, up), then ACES tone mapping with the theme's exposure into
+   an 8-bit target.
+
+The main pass writes each colour as `c / (1 + max(c))`, so the average of the samples is the weighted
+resolve of the C++ game, which keeps neon and highlight edges smooth. The composite and bloom passes
+undo the weight per texel. `Capabilities::hdr_resolve` says whether the device resolves `Rgba16Float`;
+without it a shader resolve (`resolve.wgsl`) averages the weighted samples instead. A GPU test checks
+that both give the same frame.
+
+Known deviation from C++: the translucent aim guide blends over the weighted scene, so it is up
+to about 16 of 255 levels less bright in its cyan than before. Drawing it after the resolve would restore
+that, at the cost of an extra pass and no multisampling on its edges. Where two boxes touch with exactly
+equal depth, a few edge pixels show the other surface than before; they were already z-fighting.
+
+Measured on an Intel UHD (Comet Lake GT2), release build, 1920x1080, full path: Neon 71 frames/s
+(minimum 63), Classic 72, Outdoor 90. The remaining cost is mostly the four point lights in the lit
+shader (about 2.9 ms of GPU time in Neon).
 
 The basic path draws only the main pass and tone maps in the lit shader.
 
@@ -127,13 +144,43 @@ About once a second the averages go to stderr as in C++, for example
 that did not run shows 0.00. Without timestamp queries the app prints
 `render stats: timestamp queries not supported by this adapter` once and runs without stats.
 
-The app wires it in four small modules. `scene_adapter` is the one place that turns a lane `Snapshot`
+The app wires it in a few small modules. `scene_adapter` is the one place that turns a lane `Snapshot`
 into a `SceneDescription` (pins sit `PIN_MESH_OFFSET_Y` along their own up axis, aim guide only while
 aiming or charging). `follow_camera` ports the C++ camera rig: home behind the foul line, follows the
 rolling ball, eases back, and lets the window sleep once it is home. `view3d` keeps the renderer in
 egui-wgpu's callback resources and draws it from a paint callback in the central panel. `cli` parses
-`--theme`, `--mute` and `--debug-view` with clap and collects the startup warnings, which
+`--theme`, `--mute`, `--debug-view` and `--screen` with clap and collects the startup warnings, which
 `main` prints once. The window keeps eframe's defaults (no multisampling, no depth buffer).
+
+## HUD, menus and settings
+
+The 3D view fills the middle of the central panel; the HUD is egui drawing around it, as in the C++ game.
+The modules split into pure logic, which is unit-tested, and drawing:
+
+- `hud_text`: every string the player reads (hints, phase names, `STRIKE!`, `SPARE!`, `Gutter`,
+  `N pins`, `Game over - score N`, the status line, the sound status, the Controls text and the unknown
+  theme message). `throw_result` is the one rule for what a throw was; the sound director uses it too.
+- `hud_layout`: the bands, 18 % of the height on top for the scoreboard and 10 % at the bottom for the
+  power bar, hint and result. The 3D view gets the rest.
+- `scoreboard`: the cell text and the grid geometry. `hud` draws the board and the bottom band from
+  `HudGeometry`, which is recomputed from the area every frame, so everything rescales on resize.
+- `menus` and `dialogs`: the menu bar (Game, View, Sound, Help) with the shortcut text in the labels,
+  and the Controls and About windows. `menus::sound_menu` gives the checked and enabled states as a
+  value, so they are tested without a window.
+- `command`: `route` decides what a key does. A dialog closes on Esc first and blocks the game, theme and
+  sound keys; Release always passes, so a throw never sticks while charging. `menu_click_allowed` does
+  the same for menu clicks. With no dialog, Esc runs Quit.
+- `fonts`: Rubik Medium is embedded and set as egui's proportional font.
+- `settings_store`: reads and writes `sound.muted`, `sound.volume` and `sound.ambience` through eframe's
+  storage, as strings. Each value falls back to its default on its own, and a volume is cut to 0 to 100.
+  `SoundControl::persisted` writes the stored mute value while only `--mute` muted the session. The
+  theme is not stored, as in C++. `App::save` is the `eframe::App` method; `RedrawAlways` forwards it.
+- `screen`: the `--screen=<name>` hook (`game`, `controls`, `about`, `sound-menu`, `theme-classic`,
+  `theme-outdoor`). It sets the start state only: an open dialog, the Sound menu drawn open, a theme.
+  The screenshot tool of the manual drives it.
+
+`app/acceptance.rs` holds the smoke tests of the acceptance list; see
+[ACCEPTANCE.md](ACCEPTANCE.md).
 
 ## Audio
 
@@ -157,7 +204,7 @@ output and shows `volume NN %` or `sound muted` in the status bar.
 - `bowlingbox` (the app) uses `bowlingbox-lane` for the throw, `bowlingbox-score` for the sheet,
   `bowlingbox-render` for the 3D view, `clap` for the command line, `glam` for the scene types, and
   `eframe` for the window. `eframe` runs with the wgpu renderer and default features off; only `wgpu`,
-  `default_fonts`, `wayland`, `x11` and `accesskit` are on. The app also names `winit` to switch on
+  `default_fonts`, `wayland`, `x11`, `accesskit` and `persistence` are on. The app also names `winit` to switch on
   `wayland-csd-adwaita`, so GNOME on Wayland gets a title bar.
 - `buildkit` is a build dependency of the app. It supplies the version string that `--version` and the
   About window show.

@@ -19,7 +19,7 @@ pub const MOUSE_ANGLE_STEP: f32 = 0.05;
 pub fn key_down(key: Key, modifiers: Modifiers, phase: Phase) -> Option<Command> {
     let can_aim = matches!(phase, Phase::Aiming | Phase::Charging);
     match key {
-        Key::Escape if modifiers.is_none() => Some(Command::Quit),
+        Key::Escape if modifiers.is_none() => Some(Command::Escape),
         Key::Q if modifiers.matches_exact(Modifiers::COMMAND) => Some(Command::Quit),
         Key::N => Some(Command::NewGame),
         Key::T => Some(Command::CycleTheme),
@@ -163,7 +163,7 @@ mod tests {
         );
         assert_eq!(
             key_down(Key::Escape, NONE, Phase::Settling),
-            Some(Command::Quit)
+            Some(Command::Escape)
         );
         assert_eq!(
             key_down(Key::Q, Modifiers::COMMAND, Phase::Aiming),

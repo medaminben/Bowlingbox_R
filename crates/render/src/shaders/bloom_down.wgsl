@@ -1,6 +1,6 @@
 // The bloom chain's way down (C++ kBrightFs, kBloomDownFs): `fs_bright` keeps what is brighter
 // than 1 from the resolved scene in the first level; `fs_bloom_down` filters each level into the
-// next, half the size.
+// next, half the size. Follows weight.wgsl.
 
 struct Varyings {
     @builtin(position) position: vec4<f32>,
@@ -22,9 +22,21 @@ fn vs_post(@builtin(vertex_index) index: u32) -> Varyings {
 const MAX_BRIGHT: f32 = 16.0;
 const THRESHOLD: f32 = 1.0;
 
+// A resolved scene texel with its weight undone (weight.wgsl), clamped to the edge.
+fn scene_at(p: vec2<i32>, size: vec2<i32>) -> vec3<f32> {
+    return resolve_unweight(textureLoad(src, clamp(p, vec2(0), size - 1), 0).rgb);
+}
+
 @fragment
 fn fs_bright(in: Varyings) -> @location(0) vec4<f32> {
-    let c = min(textureSample(src, src_sampler, in.uv).rgb, vec3(MAX_BRIGHT));
+    // Bilinear by hand: the sampler would filter the weighted texels, not the scene.
+    let size = vec2<i32>(textureDimensions(src));
+    let x = in.uv * vec2<f32>(size) - 0.5;
+    let i = vec2<i32>(floor(x));
+    let f = fract(x);
+    let top = mix(scene_at(i, size), scene_at(i + vec2(1, 0), size), f.x);
+    let bottom = mix(scene_at(i + vec2(0, 1), size), scene_at(i + vec2(1, 1), size), f.x);
+    let c = min(mix(top, bottom, f.y), vec3(MAX_BRIGHT));
     let peak = max(max(c.r, c.g), c.b);
     return vec4(c * max(peak - THRESHOLD, 0.0) / max(peak, 1e-4), 1.0);
 }

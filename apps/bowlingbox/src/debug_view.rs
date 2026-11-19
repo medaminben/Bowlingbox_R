@@ -148,19 +148,9 @@ pub fn lane(ui: &mut egui::Ui, snapshot: &Snapshot) -> Rect {
     rect
 }
 
-/// The status line: phase, total and the last throw.
-pub fn status(snapshot: &Snapshot, sheet: &dyn ScoreSheet) -> String {
-    let line = format!("{} | Score {}", snapshot.phase, sheet.score());
-    match snapshot.last_pins_down {
-        Some(pins) => format!("{line} | Last throw {pins} pins"),
-        None => line,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bowlingbox_score::ScoreCalculator;
     use eframe::egui::vec2;
 
     fn projection() -> Projection {
@@ -180,24 +170,5 @@ mod tests {
         let low = p.point(0.0, VIEW_Z_MIN);
         let high = p.point(0.0, VIEW_Z_MAX);
         assert!(low.y <= 800.0 && high.y >= 0.0);
-    }
-
-    #[test]
-    fn status_shows_phase_score_and_last_throw() {
-        let snapshot = Snapshot {
-            phase: Phase::FrameDone,
-            ball: bowlingbox_lane::Pose::default(),
-            pins: [bowlingbox_lane::Pose::default(); 10],
-            pin_standing: [true; 10],
-            pin_in_play: [true; 10],
-            aim_offset: 0.0,
-            aim_angle: 0.0,
-            power: 0.0,
-            last_pins_down: Some(7),
-        };
-        assert_eq!(
-            status(&snapshot, &ScoreCalculator::default()),
-            "frame done | Score 0 | Last throw 7 pins"
-        );
     }
 }

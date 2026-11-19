@@ -1,6 +1,5 @@
-// The full path's MSAA resolve (C++ kResolveFs). A plain average lets one sample of a neon strip
-// (5.0) or the ball's highlight (~40) dominate an edge pixel, so edges look jagged again after the
-// tone map. Averaging c / (1 + max(c)) and inverting that curve afterwards keeps the edge gradient.
+// The full path's MSAA resolve where the HDR format has no hardware resolve: the plain average of
+// the samples, which the main pass stored weighted (weight.wgsl), as the hardware resolve takes it.
 
 @group(0) @binding(0) var src: texture_multisampled_2d<f32>;
 
@@ -16,9 +15,7 @@ fn fs_resolve(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     let samples = textureNumSamples(src);
     var sum = vec3(0.0);
     for (var i = 0u; i < samples; i++) {
-        let c = textureLoad(src, p, i32(i)).rgb;
-        sum += c / (1.0 + max(max(c.r, c.g), c.b));
+        sum += textureLoad(src, p, i32(i)).rgb;
     }
-    let t = sum / f32(samples);
-    return vec4(t / max(1.0 - max(max(t.r, t.g), t.b), 1e-4), 1.0);
+    return vec4(sum / f32(samples), 1.0);
 }
