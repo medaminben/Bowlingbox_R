@@ -31,7 +31,7 @@ theme and the sound and do nothing yet.
 | [`crates/score`](crates/score) | `bowlingbox-score`: the ten-pin scoring rules. |
 | [`apps/bowlingbox`](apps/bowlingbox) | `bowlingbox`: the game. |
 | [`crates/lane`](crates/lane) | `bowlingbox-lane`: the lane types, the physics trait and the throw state machine. |
-| [`crates/render`](crates/render) | `bowlingbox-render`: GPU-free render data and maths: themes, decor layout, meshes, lighting maths, camera and scene description. |
+| [`crates/render`](crates/render) | `bowlingbox-render`: themes, decor layout, meshes, lighting maths, camera, scene description and the wgpu scene renderer. |
 
 `cargo bk add-crate <name>` and `cargo bk add-app <name> --console|--gui` add a row to this table and to the one in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Your own text in either file is never rewritten.
 

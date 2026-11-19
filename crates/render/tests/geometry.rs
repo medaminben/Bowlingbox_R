@@ -1,4 +1,4 @@
-use bowlingbox_render::{MeshData, box_data, cylinder_data, pin_data, sphere_data};
+use bowlingbox_render::{MeshData, box_data, cone_data, cylinder_data, pin_data, sphere_data};
 
 fn expect_well_formed(m: &MeshData) {
     assert_eq!(m.positions.len(), m.normals.len());
@@ -81,4 +81,28 @@ fn pin_profile_is_smooth() {
         }
         prev = Some(angle);
     }
+}
+
+/// The renderer culls back faces, so every triangle must wind counter-clockwise seen from outside
+/// (its right-handed face normal points the way its vertex normals do).
+fn expect_outward_winding(m: &MeshData) {
+    let p = |i: u32| glam::Vec3::from_array(m.positions[i as usize]);
+    let n = |i: u32| glam::Vec3::from_array(m.normals[i as usize]);
+    for t in m.indices.as_chunks::<3>().0 {
+        let face = (p(t[1]) - p(t[0])).cross(p(t[2]) - p(t[0]));
+        if face.length() < 1e-9 {
+            continue;
+        }
+        let normal = n(t[0]) + n(t[1]) + n(t[2]);
+        assert!(face.dot(normal) > 0.0, "triangle {t:?} winds inward");
+    }
+}
+
+#[test]
+fn every_mesh_winds_counter_clockwise_from_outside() {
+    expect_outward_winding(&box_data(0.5, 0.5, 0.5));
+    expect_outward_winding(&sphere_data(0.109, 48));
+    expect_outward_winding(&cylinder_data(0.5, 1.0, 24));
+    expect_outward_winding(&cone_data(0.5, 1.0, 24));
+    expect_outward_winding(&pin_data(0.38, 0.06, 0.12, 40));
 }

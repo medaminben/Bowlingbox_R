@@ -503,7 +503,10 @@ dependencies = [
 name = "bowlingbox-render"
 version = "2.0.0"
 dependencies = [
+ "bytemuck",
  "glam 0.34.3",
+ "pollster",
+ "wgpu",
 ]
 
 [[package]]

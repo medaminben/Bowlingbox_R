@@ -3,8 +3,8 @@
 Bowlingbox keeps its rules in small crates that need no window, GPU or audio device, and a thin app that
 wires them to an egui window (eframe with the wgpu backend).
 
-Crates: `score` (the scoring rules), `lane` (the throw and the physics seam) and `render` (the
-GPU-free themes, decor, meshes, lighting maths and camera; the wgpu renderer follows) exist now. `audio`
+Crates: `score` (the scoring rules), `lane` (the throw and the physics seam) and `render` (themes,
+decor, meshes, lighting maths, the camera and the wgpu scene renderer) exist now. `audio`
 (the sound catalogue and the output seam) comes in a later milestone. `lane` uses `score`; `render` and `audio` will use neither `lane` nor each other.
 Only the app converts between their types.
 
@@ -16,7 +16,7 @@ Only the app converts between their types.
 | [`crates/score`](crates/score) | `bowlingbox-score`: the ten-pin scoring rules. |
 | [`apps/bowlingbox`](apps/bowlingbox) | `bowlingbox`: the game. |
 | [`crates/lane`](crates/lane) | `bowlingbox-lane`: the lane types, the physics trait and the throw state machine. |
-| [`crates/render`](crates/render) | `bowlingbox-render`: GPU-free render data and maths: themes, decor layout, meshes, lighting maths, camera and scene description. |
+| [`crates/render`](crates/render) | `bowlingbox-render`: themes, decor layout, meshes, lighting maths, camera, scene description and the wgpu scene renderer. |
 
 Libraries live in `crates/` and hold the logic. Apps live in `apps/` and only wire a library to an interface: a command line or a window. An app depends on a library, never the other way round, so each library can be tested without an interface.
 
@@ -77,6 +77,23 @@ before the ball nears the rack. The app must drain them every frame: the buffer 
   on its axis `LANE.pin_origin_height` (0.12 m) above its nominal base. That point is not the centre of
   mass, which Rapier computes from the collider shape.
 
+## The scene renderer
+
+`SceneRenderer` draws the basic path of the C++ renderer: the lit shader (GGX key light, hemisphere
+ambient, up to four point lights, fog, emissive materials, wood and ball patterns, tone mapping), the
+sky gradient behind the opaque geometry and the translucent aim guide. Shadows, reflections, an HDR
+target and bloom come in milestone 5. The shaders are WGSL in `crates/render/src/shaders`.
+
+It fits an egui-wgpu paint callback. `prepare` draws the scene into the renderer's own colour and
+depth targets, sized to the view, and returns the command buffer to submit before egui's pass;
+`paint` copies the result into egui's pass. That pass must have no depth attachment (eframe's
+default), because the copy pipeline has none. A zero-size view draws nothing.
+
+The renderer stays within wgpu's WebGL2 downlevel limits, so it also runs on the GL backend. The GPU
+smoke test requests a device with those limits; without an adapter it prints a note and passes.
+`render_mode_from_env` reads `BOWLINGBOX_RENDER`: `basic`, in any case, is the only path so far, and
+`render_mode_warning` gives the one line to print for any other value.
+
 ## Dependencies
 
 - `bowlingbox-score` has no dependencies, so it builds and tests without a window or a GPU.
@@ -86,6 +103,8 @@ before the ball nears the rack. The app must drain them every frame: the buffer 
   `wayland-csd-adwaita`, so GNOME on Wayland gets a title bar.
 - `buildkit` is a build dependency of the app. It supplies the version string that `--version` and the
   About window show.
+- `bowlingbox-render` depends on `glam`, `bytemuck` and `wgpu`. The workspace pins `wgpu` to the
+  version eframe's `egui-wgpu` uses, so the tree has one wgpu.
 - `bowlingbox-lane` depends on `bowlingbox-score` and `rapier3d`. `render` and `audio` will depend on
   neither `lane` nor each other.
 - The dev profile builds `rapier3d` and `parry3d` with `opt-level = 3`, so a debug build simulates in
