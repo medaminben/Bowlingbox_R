@@ -19,6 +19,8 @@ struct Frame {
     lane: vec4<f32>,           // lane half width, board width, pin deck z, unused
     light_vp: mat4x4<f32>,     // the key light's view projection (shadow map)
     shadow: vec4<f32>,         // shadows 0/1 (full path only), unused
+    clip_plane: vec4<f32>,     // world space, mirrored pass only; (0, 0, 0, 1) keeps everything
+    reflect: vec4<f32>,        // scene target width, height; lane reflection 0/1 (full path), unused
 }
 
 struct Draw {
@@ -27,6 +29,7 @@ struct Draw {
     color: vec4<f32>,          // linear rgb, alpha
     band: vec4<f32>,           // neck stripe min y, max y (object space); emissive 0/1, emissive strength
     surface: vec4<f32>,        // roughness, specular, pattern (0 none, 1 wood, 2 ball swirl), fog 0/1
+    flags: vec4<f32>,          // the main lane 0/1 (shows the reflection), unused
 }
 
 @group(0) @binding(0) var<uniform> frame: Frame;

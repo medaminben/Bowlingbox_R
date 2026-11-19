@@ -13,9 +13,9 @@ pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 pub const SHADOW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 /// Floats in the WGSL `Frame` struct (common.wgsl), in its field order.
-pub const FRAME_FLOATS: usize = 16 + 16 + 9 * 4 + 4 * 4 + 4 * 4 + 4 + 4 + 16 + 4;
+pub const FRAME_FLOATS: usize = 16 + 16 + 9 * 4 + 4 * 4 + 4 * 4 + 4 + 4 + 16 + 3 * 4;
 /// Floats in the WGSL `Draw` struct.
-pub const DRAW_FLOATS: usize = 16 + 16 + 3 * 4;
+pub const DRAW_FLOATS: usize = 16 + 16 + 4 * 4;
 /// Distance between draws in the dynamic-offset uniform buffer: the largest
 /// `min_uniform_buffer_offset_alignment` wgpu allows, so it suits every adapter.
 pub const DRAW_STRIDE: u64 = 256;
@@ -87,6 +87,8 @@ struct ScenePass<'a> {
     /// Mesh vertices, or none for a generated triangle.
     meshes: bool,
     cull: Option<wgpu::Face>,
+    /// `Cw`, except in the mirrored pass, whose reflection flips the winding.
+    front_face: wgpu::FrontFace,
     depth_write: bool,
     depth_compare: wgpu::CompareFunction,
     blend: Option<wgpu::BlendState>,
@@ -117,7 +119,7 @@ fn scene_pipeline(
         // Meshes wind counter-clockwise seen from outside in world space; the left-handed camera
         // mirrors that to clockwise on screen.
         primitive: wgpu::PrimitiveState {
-            front_face: wgpu::FrontFace::Cw,
+            front_face: p.front_face,
             cull_mode: p.cull,
             ..wgpu::PrimitiveState::default()
         },
@@ -187,6 +189,35 @@ pub fn shadow_pipeline(
         multiview_mask: None,
         cache: None,
     })
+}
+
+/// The lit pass mirrored in the lane plane (C++ `reflectionPass`), into the single-sample
+/// reflection target through the frame and draw groups.
+pub fn mirror_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
+    let module = shader(device, "lit mirror", include_str!("../shaders/lit.wgsl"));
+    scene_pipeline(
+        device,
+        layout,
+        format,
+        1,
+        &ScenePass {
+            label: "lit mirror",
+            module: &module,
+            vertex: "vs_mesh",
+            fragment: "fs_lit_mirror",
+            meshes: true,
+            cull: Some(wgpu::Face::Back),
+            // The mirrored view turns clockwise screen winding into counter-clockwise.
+            front_face: wgpu::FrontFace::Ccw,
+            depth_write: true,
+            depth_compare: wgpu::CompareFunction::Less,
+            blend: None,
+        },
+    )
 }
 
 /// The copy of the scene into the caller's pass, and the layout of its one texture.
@@ -274,6 +305,7 @@ impl ScenePipelines {
                 vertex: "vs_mesh",
                 fragment: &format!("fs_lit{hdr}"),
                 meshes: true,
+                front_face: wgpu::FrontFace::Cw,
                 cull: Some(wgpu::Face::Back),
                 depth_write: true,
                 depth_compare: wgpu::CompareFunction::Less,
@@ -285,6 +317,7 @@ impl ScenePipelines {
                 vertex: "vs_sky",
                 fragment: &format!("fs_sky{hdr}"),
                 meshes: false,
+                front_face: wgpu::FrontFace::Cw,
                 cull: None,
                 depth_write: false,
                 depth_compare: wgpu::CompareFunction::LessEqual,
@@ -297,6 +330,7 @@ impl ScenePipelines {
                 vertex: "vs_mesh",
                 fragment: &format!("fs_guide{hdr}"),
                 meshes: true,
+                front_face: wgpu::FrontFace::Cw,
                 cull: None,
                 depth_write: false,
                 depth_compare: wgpu::CompareFunction::Less,

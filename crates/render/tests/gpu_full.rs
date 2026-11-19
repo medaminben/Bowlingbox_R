@@ -353,7 +353,10 @@ fn the_ball_shadows_the_lane_on_the_side_away_from_the_sun() {
     camera.look_at(Vec3::new(-1.0, 0.8, 0.0), Vec3::new(0.0, 0.0, 1.0));
     camera.set_viewport(W, H);
     let scene = ball_at(Vec3::new(0.0, G.ball_radius, 1.0));
-    renderer.set_full_path_options(FullPathOptions { shadows: false });
+    renderer.set_full_path_options(FullPathOptions {
+        shadows: false,
+        ..FullPathOptions::default()
+    });
     let lit = render(&gpu, &mut renderer, 1, &camera, &scene);
     renderer.set_full_path_options(FullPathOptions::default());
     let shadowed = render(&gpu, &mut renderer, 1, &camera, &scene);
@@ -372,6 +375,63 @@ fn the_ball_shadows_the_lane_on_the_side_away_from_the_sun() {
         close(with, without),
         "open lane ({x}, {y}): {with:?} with shadows, {without:?} without"
     );
+}
+
+/// The ten pins standing in the rack, as the physics world places them.
+fn racked_pins() -> SceneDescription {
+    let s = G.pin_spacing;
+    let row = s * 0.866_025_4;
+    let spots = [
+        (0.0, 0.0),
+        (-s / 2.0, row),
+        (s / 2.0, row),
+        (-s, 2.0 * row),
+        (0.0, 2.0 * row),
+        (s, 2.0 * row),
+        (-1.5 * s, 3.0 * row),
+        (-s / 2.0, 3.0 * row),
+        (s / 2.0, 3.0 * row),
+        (1.5 * s, 3.0 * row),
+    ];
+    let mut scene = empty_scene();
+    for (pin, (x, dz)) in scene.pins.iter_mut().zip(spots) {
+        pin.position = Vec3::new(x, G.pin_com_height, G.head_pin_z + dz);
+    }
+    scene.pin_visible = [true; 10];
+    scene
+}
+
+#[test]
+fn standing_pins_are_mirrored_in_the_lane_in_front_of_the_deck() {
+    let Some(gpu) = full_gpu() else { return };
+    // Low over the lane, looking at the head pin.
+    let mut camera = Camera::default();
+    camera.look_at(
+        Vec3::new(0.0, 0.3, G.head_pin_z - 1.9),
+        Vec3::new(0.0, 0.1, G.head_pin_z),
+    );
+    camera.set_viewport(W, H);
+    // The head pin's belly mirrored below the lane: the lane pixel in front of the deck that
+    // shows it.
+    let (x, y) = pixel(&camera, Vec3::new(0.0, -0.2, G.head_pin_z));
+    let scene = racked_pins();
+    for id in THEMES {
+        let mut renderer = full_renderer(&gpu, 1, id);
+        renderer.set_full_path_options(FullPathOptions {
+            reflection: false,
+            ..FullPathOptions::default()
+        });
+        let plain = render(&gpu, &mut renderer, 1, &camera, &scene);
+        renderer.set_full_path_options(FullPathOptions::default());
+        let mirrored = render(&gpu, &mut renderer, 1, &camera, &scene);
+        let (with, without) = (mirrored.at(x, y), plain.at(x, y));
+        // The lit wood is about as bright as the pin, so the reflection shows as the white pin
+        // pulling the orange wood towards blue.
+        assert!(
+            with[2] >= without[2] + 8,
+            "{id:?} ({x}, {y}): {with:?} with reflection, {without:?} without"
+        );
+    }
 }
 
 #[test]

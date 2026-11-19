@@ -1,12 +1,12 @@
 //! The full render path: the scene in linear HDR with MSAA, resolved and then tone mapped by a
 //! composite pass into the same 8-bit output the basic path fills, with the key light's shadow
-//! map. Reflection and bloom come later.
+//! map and the lane reflection. Bloom comes later.
 
 use super::capabilities::{HDR_FORMAT, catch_errors};
 use super::pipelines::{
-    Pipelines, SCENE_FORMAT, SceneOutput, ScenePipelines, TONEMAP, shadow_pipeline,
+    Pipelines, SCENE_FORMAT, SceneOutput, ScenePipelines, TONEMAP, mirror_pipeline, shadow_pipeline,
 };
-use super::targets::{HdrTargets, ShadowMap, TargetLayouts};
+use super::targets::{HdrTargets, Reflection, ShadowMap, TargetLayouts};
 use std::borrow::Cow;
 use std::num::NonZeroU64;
 
@@ -18,20 +18,30 @@ const POST_FLOATS: usize = 4;
 pub struct FullPathOptions {
     /// The key light's shadow map.
     pub shadows: bool,
+    /// The half-resolution mirror of the scene that the main lane shows.
+    pub reflection: bool,
 }
 
 impl Default for FullPathOptions {
     fn default() -> Self {
-        Self { shadows: true }
+        Self {
+            shadows: true,
+            reflection: true,
+        }
     }
 }
 
 pub struct FullPath {
     samples: u32,
-    /// Draws the scene into the HDR target; the lit pipeline samples the shadow map (group 2).
+    /// Draws the scene into the HDR target; the lit pipeline samples the shadow map (group 2) and
+    /// the reflection (group 3).
     scene: ScenePipelines,
     shadow: wgpu::RenderPipeline,
     shadow_map: ShadowMap,
+    /// Draws the mirrored scene into the reflection target.
+    mirror: wgpu::RenderPipeline,
+    reflection_layout: wgpu::BindGroupLayout,
+    reflection_sampler: wgpu::Sampler,
     resolve_layout: wgpu::BindGroupLayout,
     resolve: wgpu::RenderPipeline,
     composite_layout: wgpu::BindGroupLayout,
@@ -107,12 +117,14 @@ impl FullPath {
     pub fn new(device: &wgpu::Device, pipelines: &Pipelines, samples: u32) -> Result<Self, String> {
         catch_errors(device, || {
             let shadow_layout = ShadowMap::layout(device);
+            let reflection_layout = Reflection::layout(device);
             let scene_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("hdr scene"),
                 bind_group_layouts: &[
                     Some(&pipelines.frame_layout),
                     Some(&pipelines.draw_layout),
                     Some(&shadow_layout),
+                    Some(&reflection_layout),
                 ],
                 immediate_size: 0,
             });
@@ -120,6 +132,8 @@ impl FullPath {
                 ScenePipelines::new(device, &scene_layout, SceneOutput::Hdr(HDR_FORMAT), samples);
             let shadow = shadow_pipeline(device, &pipelines.scene_layout);
             let shadow_map = ShadowMap::new(device, &shadow_layout);
+            let mirror = mirror_pipeline(device, &pipelines.scene_layout, HDR_FORMAT);
+            let reflection_sampler = Reflection::sampler(device);
             let resolve_layout =
                 device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                     label: Some("hdr resolve"),
@@ -169,6 +183,9 @@ impl FullPath {
                 scene,
                 shadow,
                 shadow_map,
+                mirror,
+                reflection_layout,
+                reflection_sampler,
                 resolve_layout,
                 resolve,
                 composite_layout,
@@ -206,9 +223,17 @@ impl FullPath {
             resolve: &self.resolve_layout,
             composite: &self.composite_layout,
             blit: blit_layout,
+            reflection: &self.reflection_layout,
         };
         let targets = catch_errors(device, || {
-            HdrTargets::new(device, size, self.samples, &layouts, &self.post_buffer)
+            HdrTargets::new(
+                device,
+                size,
+                self.samples,
+                &layouts,
+                &self.post_buffer,
+                &self.reflection_sampler,
+            )
         })?;
         self.targets = Some(targets);
         Ok(())
@@ -219,19 +244,21 @@ impl FullPath {
         queue.write_buffer(&self.post_buffer, 0, bytemuck::cast_slice(&post));
     }
 
-    /// The shadow pass (`casters` draws them with the pipeline it is given) when `shadows`, the
-    /// main pass (`draw` fills it), the resolve and the composite into the output target.
+    /// The shadow pass (`casters` draws them with the pipeline it is given) and the reflection
+    /// pass (`mirrored` likewise) when `options` turn them on, the main pass (`draw` fills it), the
+    /// resolve and the composite into the output target.
     pub fn record(
         &self,
         encoder: &mut wgpu::CommandEncoder,
-        shadows: bool,
+        options: FullPathOptions,
         casters: impl FnOnce(&mut wgpu::RenderPass<'_>, &wgpu::RenderPipeline),
+        mirrored: impl FnOnce(&mut wgpu::RenderPass<'_>, &wgpu::RenderPipeline),
         draw: impl FnOnce(&mut wgpu::RenderPass<'_>),
     ) {
         let Some(t) = &self.targets else {
             return;
         };
-        if shadows {
+        if options.shadows {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("shadow"),
                 color_attachments: &[],
@@ -246,6 +273,31 @@ impl FullPath {
                 ..Default::default()
             });
             casters(&mut pass, &self.shadow);
+        }
+        if options.reflection {
+            // Cleared to transparent black: alpha marks the covered pixels (C++ reflectionPass).
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("reflection"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &t.reflection.color,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &t.reflection.depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            mirrored(&mut pass, &self.mirror);
         }
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -269,8 +321,9 @@ impl FullPath {
                 }),
                 ..Default::default()
             });
-            // Bound even without shadows: the lit pipeline's layout has the group.
+            // Bound even when the passes are off: the lit pipeline's layout has the groups.
             pass.set_bind_group(2, &self.shadow_map.group, &[]);
+            pass.set_bind_group(3, &t.reflection.group, &[]);
             draw(&mut pass);
         }
         if let Some(group) = &t.resolve_group {

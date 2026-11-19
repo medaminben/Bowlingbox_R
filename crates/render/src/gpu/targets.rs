@@ -8,6 +8,7 @@ pub struct TargetLayouts<'a> {
     pub resolve: &'a wgpu::BindGroupLayout,
     pub composite: &'a wgpu::BindGroupLayout,
     pub blit: &'a wgpu::BindGroupLayout,
+    pub reflection: &'a wgpu::BindGroupLayout,
 }
 
 pub struct HdrTargets {
@@ -27,6 +28,7 @@ pub struct HdrTargets {
     pub composite_group: wgpu::BindGroup,
     /// Reads `output`.
     pub blit_group: wgpu::BindGroup,
+    pub reflection: Reflection,
 }
 
 impl HdrTargets {
@@ -36,6 +38,7 @@ impl HdrTargets {
         samples: u32,
         layouts: &TargetLayouts<'_>,
         post_uniforms: &wgpu::Buffer,
+        reflection_sampler: &wgpu::Sampler,
     ) -> Self {
         let extent = wgpu::Extent3d {
             width: size[0],
@@ -93,6 +96,12 @@ impl HdrTargets {
             ],
         );
         let blit_group = group("full output", layouts.blit, &[view_entry(0, &output)]);
+        let reflection = Reflection::new(
+            device,
+            reflection_size(size),
+            layouts.reflection,
+            reflection_sampler,
+        );
         Self {
             size,
             msaa,
@@ -102,6 +111,114 @@ impl HdrTargets {
             resolve_group,
             composite_group,
             blit_group,
+            reflection,
+        }
+    }
+}
+
+/// The reflection target's size for a scene of `size`: half, at least 1x1 (C++ `frameSizes`).
+#[must_use]
+pub fn reflection_size(size: [u32; 2]) -> [u32; 2] {
+    size.map(|side| (side / 2).max(1))
+}
+
+/// The scene mirrored in the lane plane (C++ `reflection`, `GL_RGBA16F` with a depth buffer, one
+/// sample), which the main lane samples.
+pub struct Reflection {
+    pub color: wgpu::TextureView,
+    pub depth: wgpu::TextureView,
+    /// `color` and its sampler, for the lit shader's group 3.
+    pub group: wgpu::BindGroup,
+}
+
+impl Reflection {
+    /// The layout of [`Reflection::group`].
+    pub fn layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("reflection"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        })
+    }
+
+    /// As C++ `GlFramebuffer`'s colour textures: linear, clamped to the edge.
+    pub fn sampler(device: &wgpu::Device) -> wgpu::Sampler {
+        device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("reflection"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..wgpu::SamplerDescriptor::default()
+        })
+    }
+
+    fn new(
+        device: &wgpu::Device,
+        size: [u32; 2],
+        layout: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
+    ) -> Self {
+        let texture = |label: &str, format, usage| {
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d {
+                        width: size[0],
+                        height: size[1],
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage,
+                    view_formats: &[],
+                })
+                .create_view(&wgpu::TextureViewDescriptor::default())
+        };
+        let color = texture(
+            "reflection",
+            HDR_FORMAT,
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        );
+        let depth = texture(
+            "reflection depth",
+            DEPTH_FORMAT,
+            wgpu::TextureUsages::RENDER_ATTACHMENT,
+        );
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("reflection"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&color),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+            ],
+        });
+        Self {
+            color,
+            depth,
+            group,
         }
     }
 }

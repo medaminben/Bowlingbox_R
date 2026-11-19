@@ -11,11 +11,11 @@ use super::pipelines::{
 use crate::camera::Camera;
 use crate::decor::{Prop, Shape, build_props};
 use crate::lighting::{
-    LightFrustum, fit_light_frustum, props_in_box, shadow_box, srgb_to_linear_vec3,
+    LightFrustum, fit_light_frustum, props_in_box, reflection_box, shadow_box, srgb_to_linear_vec3,
 };
 use crate::scene::{SceneDescription, SceneGeometry};
 use crate::theme::{MAX_POINT_LIGHTS, Material, Pattern, Theme, ThemeId, theme};
-use glam::{Mat3, Mat4, Quat, Vec2, Vec3};
+use glam::{Mat3, Mat4, Quat, Vec2, Vec3, Vec4};
 use std::num::NonZeroU64;
 
 /// Band range that matches no y (min above max).
@@ -31,6 +31,12 @@ const GUIDE: Material = Material {
 const GUIDE_ALPHA: f32 = 0.40;
 /// The draws besides the props: lane, two gutters, two gutter walls, ten pins, ball, aim guide.
 const FIXED_DRAWS: usize = 17;
+/// The lane and its two gutters, first in the draw list; the mirrored pass leaves them out.
+const LANE_DRAWS: usize = 3;
+/// A clip plane that keeps everything.
+const KEEP_ALL: Vec4 = Vec4::new(0.0, 0.0, 0.0, 1.0);
+/// Keeps y >= 0: what lies above the lane plane (C++ reflectionPass).
+const ABOVE_LANE: Vec4 = Vec4::new(0.0, 1.0, 0.0, 0.0);
 
 struct DrawItem {
     mesh: MeshKind,
@@ -39,6 +45,17 @@ struct DrawItem {
     band: Vec2,
     alpha: f32,
     fog: bool,
+    /// The main lane, which shows the reflection (C++ uReflect).
+    lane: bool,
+}
+
+/// What differs between the main and the mirrored pass's frame uniforms (C++ `PassParams`).
+struct FramePass {
+    view: Mat4,
+    eye: Vec3,
+    shadows: bool,
+    clip_plane: Vec4,
+    reflection: bool,
 }
 
 impl DrawItem {
@@ -50,6 +67,7 @@ impl DrawItem {
             band,
             alpha: 1.0,
             fog: true,
+            lane: false,
         }
     }
 }
@@ -74,11 +92,16 @@ pub struct SceneRenderer {
     light: LightFrustum,
     /// Indices into `props` that cast into the shadow map.
     shadow_casters: Vec<usize>,
+    /// Indices into `props` that the lane mirrors.
+    reflection_casters: Vec<usize>,
     meshes: Meshes,
     pipelines: Pipelines,
     scene_samples: u32,
     frame_buffer: wgpu::Buffer,
     frame_group: wgpu::BindGroup,
+    /// The frame uniforms of the pass mirrored in the lane plane.
+    mirror_frame_buffer: wgpu::Buffer,
+    mirror_frame_group: wgpu::BindGroup,
     draw_buffer: wgpu::Buffer,
     draw_group: wgpu::BindGroup,
     draw_capacity: usize,
@@ -128,20 +151,9 @@ impl SceneRenderer {
             Ok(full) => (Some(full), None),
             Err(reason) => (None, Some(reason)),
         };
-        let frame_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("frame uniforms"),
-            size: (FRAME_FLOATS * 4) as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let frame_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("frame uniforms"),
-            layout: &pipelines.frame_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: frame_buffer.as_entire_binding(),
-            }],
-        });
+        let (frame_buffer, frame_group) = frame_buffers(device, &pipelines, "frame uniforms");
+        let (mirror_frame_buffer, mirror_frame_group) =
+            frame_buffers(device, &pipelines, "mirrored frame uniforms");
         let current = theme(theme_id);
         let props = build_props(current, &geometry);
         let draw_capacity = props.len() + FIXED_DRAWS;
@@ -151,6 +163,7 @@ impl SceneRenderer {
             meshes: Meshes::new(device, &geometry),
             light: fit_light_frustum(current.light_dir, &region),
             shadow_casters: props_in_box(&props, &geometry, &region),
+            reflection_casters: props_in_box(&props, &geometry, &reflection_box(&geometry)),
             geometry,
             theme: current,
             props,
@@ -158,6 +171,8 @@ impl SceneRenderer {
             scene_samples,
             frame_buffer,
             frame_group,
+            mirror_frame_buffer,
+            mirror_frame_group,
             draw_buffer,
             draw_group,
             draw_capacity,
@@ -207,11 +222,18 @@ impl SceneRenderer {
         let region = shadow_box(&self.geometry);
         self.shadow_casters = props_in_box(&self.props, &self.geometry, &region);
         self.light = fit_light_frustum(self.theme.light_dir, &region);
+        self.reflection_casters =
+            props_in_box(&self.props, &self.geometry, &reflection_box(&self.geometry));
     }
 
     /// The full path runs and draws the shadow map this frame.
     fn shadows(&self) -> bool {
         self.full.is_some() && self.full_options.shadows
+    }
+
+    /// The full path runs and mirrors the scene in the lane this frame.
+    fn reflection(&self) -> bool {
+        self.full.is_some() && self.full_options.reflection
     }
 
     /// Draws the scene at `size_px` (the view's size in physical pixels) into the renderer's
@@ -244,11 +266,33 @@ impl SceneRenderer {
         }
         let mut camera = *camera;
         camera.set_viewport(size_px[0], size_px[1]);
+        let main = FramePass {
+            view: camera.view(),
+            eye: camera.eye,
+            shadows: self.shadows(),
+            clip_plane: KEEP_ALL,
+            reflection: self.reflection(),
+        };
         queue.write_buffer(
             &self.frame_buffer,
             0,
-            bytemuck::cast_slice(&self.frame_uniforms(&camera)),
+            bytemuck::cast_slice(&self.frame_uniforms(&camera, &main, size)),
         );
+        if self.reflection() {
+            // C++ reflectionPass: the view mirrored in y = 0, no shadows, no reflection.
+            let mirrored = FramePass {
+                view: camera.view() * Mat4::from_scale(Vec3::new(1.0, -1.0, 1.0)),
+                eye: camera.eye * Vec3::new(1.0, -1.0, 1.0),
+                shadows: false,
+                clip_plane: ABOVE_LANE,
+                reflection: false,
+            };
+            queue.write_buffer(
+                &self.mirror_frame_buffer,
+                0,
+                bytemuck::cast_slice(&self.frame_uniforms(&camera, &mirrored, size)),
+            );
+        }
         self.collect_draws(scene);
         self.ensure_draw_capacity(device);
         queue.write_buffer(
@@ -351,14 +395,16 @@ impl SceneRenderer {
             draw_buffers(device, &self.pipelines, self.draw_capacity);
     }
 
-    fn frame_uniforms(&self, camera: &Camera) -> Vec<f32> {
+    /// `size` is the scene target's, which the lane's reflection lookup divides by.
+    fn frame_uniforms(&self, camera: &Camera, pass: &FramePass, size: [u32; 2]) -> Vec<f32> {
         let t = self.theme;
         let g = &self.geometry;
+        let flag = |b: bool| f32::from(u8::from(b));
         let mut out = Vec::with_capacity(FRAME_FLOATS);
-        out.extend_from_slice(&camera.view().to_cols_array());
+        out.extend_from_slice(&pass.view.to_cols_array());
         out.extend_from_slice(&camera.projection().to_cols_array());
         for v in [
-            camera.eye,
+            pass.eye,
             t.light_dir.normalize(),
             t.key_color * t.key_intensity,
             t.sky_ambient,
@@ -386,7 +432,9 @@ impl SceneRenderer {
             0.0,
         ]);
         out.extend_from_slice(&self.light.view_projection().to_cols_array());
-        out.extend_from_slice(&[f32::from(u8::from(self.shadows())), 0.0, 0.0, 0.0]);
+        out.extend_from_slice(&[flag(pass.shadows), 0.0, 0.0, 0.0]);
+        out.extend_from_slice(&pass.clip_plane.to_array());
+        out.extend_from_slice(&[size[0] as f32, size[1] as f32, flag(pass.reflection), 0.0]);
         debug_assert_eq!(out.len(), FRAME_FLOATS);
         out
     }
@@ -412,15 +460,18 @@ impl SceneRenderer {
         let outer_x = g.lane_half_width + g.gutter_width;
         let neck = self.neck();
         self.draws.clear();
-        self.draws.push(DrawItem::opaque(
-            unit_box,
-            block(
-                Vec3::new(0.0, -0.05, (g.lane_length - g.approach) / 2.0),
-                Vec3::new(2.0 * g.lane_half_width, 0.1, g.lane_length + g.approach),
-            ),
-            t.lane,
-            NO_BAND,
-        ));
+        self.draws.push(DrawItem {
+            lane: true,
+            ..DrawItem::opaque(
+                unit_box,
+                block(
+                    Vec3::new(0.0, -0.05, (g.lane_length - g.approach) / 2.0),
+                    Vec3::new(2.0 * g.lane_half_width, 0.1, g.lane_length + g.approach),
+                ),
+                t.lane,
+                NO_BAND,
+            )
+        });
         for sx in [-1.0, 1.0] {
             self.draws.push(DrawItem::opaque(
                 unit_box,
@@ -493,6 +544,7 @@ impl SceneRenderer {
                 band: NO_BAND,
                 alpha: GUIDE_ALPHA,
                 fog: false,
+                lane: false,
             });
         }
     }
@@ -521,6 +573,7 @@ impl SceneRenderer {
                     m.pattern as u32 as f32,
                     flag(d.fog),
                 ],
+                [flag(d.lane), 0.0, 0.0, 0.0],
             ];
             let values = fields.iter().flatten().chain(tail.iter().flatten());
             for (dst, src) in slot.iter_mut().zip(values) {
@@ -532,10 +585,15 @@ impl SceneRenderer {
 
     fn record(&self, encoder: &mut wgpu::CommandEncoder) {
         if let Some(full) = &self.full {
+            let options = FullPathOptions {
+                shadows: self.shadows(),
+                reflection: self.reflection(),
+            };
             full.record(
                 encoder,
-                self.shadows(),
+                options,
                 |pass, pipeline| self.draw_casters(pass, pipeline),
+                |pass, pipeline| self.draw_mirrored(pass, pipeline),
                 |pass| self.draw_scene(pass, full.scene()),
             );
             return;
@@ -582,6 +640,17 @@ impl SceneRenderer {
         }
     }
 
+    /// What C++ `reflectionPass` draws: walls, pins and ball, then the props in the reflection
+    /// box; not the lane and gutters, which the mirror lies in.
+    fn draw_mirrored(&self, pass: &mut wgpu::RenderPass<'_>, pipeline: &wgpu::RenderPipeline) {
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &self.mirror_frame_group, &[]);
+        let props = self.reflection_casters.iter().map(|i| self.prop_start + i);
+        for i in (LANE_DRAWS..self.prop_start).chain(props) {
+            self.draw(pass, i);
+        }
+    }
+
     fn draw(&self, pass: &mut wgpu::RenderPass<'_>, i: usize) {
         let offset = u32::try_from(i as u64 * DRAW_STRIDE).expect("draw offset fits u32");
         pass.set_bind_group(1, &self.draw_group, &[offset]);
@@ -605,6 +674,28 @@ impl SceneRenderer {
             }
         }
     }
+}
+
+fn frame_buffers(
+    device: &wgpu::Device,
+    pipelines: &Pipelines,
+    label: &str,
+) -> (wgpu::Buffer, wgpu::BindGroup) {
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size: (FRAME_FLOATS * 4) as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some(label),
+        layout: &pipelines.frame_layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: buffer.as_entire_binding(),
+        }],
+    });
+    (buffer, group)
 }
 
 fn draw_buffers(
