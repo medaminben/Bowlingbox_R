@@ -31,7 +31,6 @@ system-deps.apt = [
   "libxi6",
   "libvulkan1",
   "libgl1",
-  "libasound2",
 ]
 
 [workspace.dependencies]

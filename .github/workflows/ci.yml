@@ -20,5 +20,5 @@ jobs:
       # An input replaces system-deps.apt, so the list repeats it and adds the ALSA headers.
       apt-packages: >-
         libxkbcommon0 libwayland-client0 libx11-6 libxcursor1 libxrandr2 libxi6 libvulkan1 libgl1
-        libasound2 libasound2-dev
+        libasound2-dev
       timeout-minutes: 45
