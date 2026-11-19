@@ -1,0 +1,13 @@
+[package]
+name = "bowlingbox-audio"
+version.workspace = true
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+hound = "3.5.1"
+kira = { version = "0.12.6", default-features = false, features = ["cpal"] }
