@@ -1,12 +1,42 @@
 # Bowlingbox architecture
 
-Bowlingbox keeps its rules in small crates that need no window, GPU or audio device, and a thin app that
-wires them to an egui window (eframe with the wgpu backend).
+How Bowlingbox is built, for anyone who wants to read or change the code.
 
-Crates: `score` (the scoring rules), `lane` (the throw and the physics seam), `render` (themes,
-decor, meshes, lighting maths, the camera and the wgpu scene renderer) and `audio` (the sound
-catalogue and the output seam) exist now. `lane` uses `score`; `render` and `audio` use neither
-`lane` nor each other. Only the app converts between their types.
+## The big picture
+
+Bowlingbox is one program, `bowlingbox`, built from four libraries. The libraries hold the game's
+logic and know nothing about windows: they can be tested without a screen, a graphics card or a sound
+device. The app is the thin layer that connects them to a window, the keyboard and mouse, the GPU
+and the speakers.
+
+```mermaid
+flowchart TD
+    app["<b>bowlingbox</b> (app)<br/>window, input, HUD, menus, settings"]
+    score["<b>score</b><br/>the ten-pin rules"]
+    lane["<b>lane</b><br/>the throw and the physics"]
+    render["<b>render</b><br/>the 3D scene on the GPU"]
+    audio["<b>audio</b><br/>the sounds"]
+    app --> lane
+    app --> score
+    app --> render
+    app --> audio
+    lane --> score
+```
+
+| Part | What it does | Built on |
+| --- | --- | --- |
+| `score` | Counts a game of ten frames: strikes, spares, the tenth frame, the totals | nothing |
+| `lane` | Runs a throw from aiming to the last pin settling, and reports the pins knocked down | Rapier (physics) |
+| `render` | Draws the lane, pins, ball and theme decor in 3D | wgpu (GPU) |
+| `audio` | Plays the game's 13 sounds | kira (audio) |
+| `bowlingbox` | The window: input, HUD, menus, dialogs, settings, and the glue between the libraries | eframe and egui |
+
+Two rules keep the parts apart:
+
+- **A library never depends on the app.** Only `lane` uses another library (`score`). `render` and
+  `audio` know neither `lane` nor each other.
+- **Only the app converts between the libraries' types.** A lane snapshot becomes a 3D scene in one
+  place (`scene_adapter`), and becomes sound cues in another (`sound_director`).
 
 ## Layout
 
@@ -21,215 +51,248 @@ catalogue and the output seam) exist now. `lane` uses `score`; `render` and `aud
 
 Libraries live in `crates/` and hold the logic. Apps live in `apps/` and only wire a library to an interface: a command line or a window. An app depends on a library, never the other way round, so each library can be tested without an interface.
 
-## The score API
+## One frame, step by step
 
-`bowlingbox_score` has no dependencies. It exports:
+eframe calls `App::ui` once per frame. In order, it:
 
-- `Slot`: what one roll position shows (`NotPlayed`, `Empty`, `Strike`, `Spare`, `Pins(n)`).
-  `notation` and `total_notation` turn slots and totals into scoreboard text.
-- `ScoreSheet`: read access to a game (`rolls`, `frame_totals`, `score`, `frame_score`, `pins_left`,
-  `is_over`).
-- `Game`: a `ScoreSheet` that accepts input (`roll`, `reset`). `roll` returns `RollError::GameOver`
-  or `RollError::TooManyPins` instead of accepting a bad roll.
-- `ScoreCalculator`: the implementation of both traits.
-- `frames` and `frames_of`: a ten-frame view (`FrameView`) for drawing a scoreboard.
+1. **Reads the input.** `input` maps a key or mouse action to a `Command`, such as `MoveAim`,
+   `StartCharge`, `Release` or `CycleTheme`. `command::route` decides whether the command may run:
+   while the Controls or About window is open, Esc closes it and the game keys do nothing.
+2. **Advances the game.** `fixed_step` turns the time since the last frame into whole physics steps
+   of 1/60 s, so the game runs at the same speed at any frame rate. After a stall it runs at most five
+   steps and drops the rest. `sound_control` steps the lane, collects the pin and ball impacts and
+   hands them to the sound director, which plays the matching sounds.
+3. **Moves the camera.** `follow_camera` keeps the camera behind the foul line while aiming, follows
+   the rolling ball, and eases back afterwards.
+4. **Draws the window.** The menu bar sits at the top and the status bar at the bottom. The middle
+   holds the 3D view, with the scoreboard above it and the power bar, hint and throw result below.
+   `view3d` hands the scene to the renderer through an egui paint callback.
+5. **Sleeps when nothing moves.** While the game waits for a throw and the camera is home, the app
+   stops requesting frames, and the window draws nothing until the next input.
+
+## The score crate
+
+`bowlingbox-score` has no dependencies. It exports:
+
+- `Game`: a game that accepts rolls (`roll`, `reset`). `roll` refuses a bad roll with
+  `RollError::GameOver` or `RollError::TooManyPins` instead of accepting it.
+- `ScoreSheet`: read access to a game: `rolls`, `frame_totals`, `score`, `frame_score`, `pins_left`
+  and `is_over`.
+- `ScoreCalculator`: the implementation of both.
+- `Slot`: what one roll position on the scoreboard shows (`NotPlayed`, `Empty`, `Strike`, `Spare`,
+  `Pins(n)`). `notation` and `total_notation` turn slots and totals into scoreboard text.
+- `frames` and `frames_of`: the game as ten `FrameView`s, ready for drawing a scoreboard.
 
 The constants `FRAMES` (10), `PINS` (10) and `ROLL_SLOTS` (21) describe the sheet.
 
-## The lane API
+## The lane crate
 
-`bowlingbox_lane` depends on `bowlingbox-score` and `rapier3d`. Rapier types stay inside the crate.
-It exports:
+`bowlingbox-lane` runs a throw. It depends on `bowlingbox-score` and on Rapier, and no Rapier type
+leaves the crate.
 
-- The types: `Phase` (`Aiming`, `Charging`, `Rolling`, `Settling`, `FrameDone`, `GameOver`), `Pose`,
-  `Snapshot` (what the lane shows right now), `Body` and `Impact`, and the dimensions `LANE`
-  (`LaneDimensions`), `MAX_AIM_OFFSET`, `MAX_AIM_ANGLE_DEG` and `BALL_START_Z`.
-- `PhysicsWorld`: the rigid-body world as a trait. It knows no bowling rules and speaks arrays, so
-  `Lane` is tested with a scripted fake.
-- `Lane<W, G>`: the throw state machine, ported from C++ `Lane_impl.cpp`. It drives a `PhysicsWorld`
-  and a `bowlingbox_score::Game`. The commands (`move_aim`, `rotate_aim`, `start_charge`, `release`,
-  `new_game`) return `LaneError::WrongPhase` and change nothing when the phase does not allow them.
-  `step(dt)` advances the timers and the world; `snapshot`, `score_sheet` and `drain_impacts` read it.
-- `RapierWorld`: the `PhysicsWorld` on Rapier. It runs fixed sub-steps of 1/120 s, at most four per
-  `step` call. `Lane::default()` is the game: a `RapierWorld` and a `ScoreCalculator`.
-- The tuned throw: `POCKET_OFFSET`, `POCKET_ANGLE_DEG` and `POCKET_POWER` describe a throw that usually
-  strikes. The tests and the manual use them as the one source.
-- `PIN_MESH_OFFSET_Y`: what the renderer adds to a pin pose, along the pin's own up axis, to place
-  the C++ pin mesh. The pin collider ends 2 cm above the mesh base, and the pins spawn resting on the
-  deck.
+`Lane` is the throw as a state machine. Its phase moves through `Aiming`, `Charging`, `Rolling`,
+`Settling` and `FrameDone`, and ends in `GameOver` after the tenth frame. The commands `move_aim`,
+`rotate_aim`, `start_charge`, `release` and `new_game` return `LaneError::WrongPhase` and change
+nothing when the phase does not allow them. `step(dt)` advances the timers and the physics.
+`snapshot` tells the rest of the program what the lane shows right now: the phase, the poses of the
+ball and pins, the aim and the power.
 
-Impacts are reported once per pair of bodies, on their first touch. A pair that stays in contact does
-not report again until the bodies separate. Contacts below 0.3 N·s are dropped, and so are pin contacts
-before the ball nears the rack. The app must drain them every frame: the buffer holds 256.
+The physics sits behind the `PhysicsWorld` trait, which knows no bowling rules. That keeps `Lane`
+testable with a scripted fake world. The real one, `RapierWorld`, runs fixed sub-steps of 1/120 s,
+at most four per `step` call. `Lane::default()` is the game: a `RapierWorld` and a `ScoreCalculator`.
 
-### Conventions
+The physics is tuned by hand, because Rapier does not reproduce the C++ game's Bullet numbers. The
+constants `POCKET_OFFSET`, `POCKET_ANGLE_DEG` and `POCKET_POWER` describe a throw that usually strikes;
+the tests and the manual both use them.
+
+Impacts, which drive the sounds, are reported once per pair of bodies on their first touch. A pair
+that stays in contact does not report again until the bodies separate. Contacts below 0.3 N·s are
+dropped, and so are pin contacts before the ball nears the rack. The app must drain the impacts every
+frame, because the buffer holds 256.
+
+### Units and axes
 
 - Units are metres, seconds and kilograms. Angles are in degrees where a name ends in `_deg`.
-- The origin is on the foul line in the middle of the lane, with the deck surface at `y = 0`. +z runs
-  down the lane from the foul line towards the pins, +y is up and +x is the bowler's right. Right and D
-  move and turn the aim towards +x.
-- +x is drawn on the right of the screen, so Right moves the ball right. The debug view does this, and
-  the 3D camera must too. A right-handed look-at down +z, as in the C++ game, puts +x on the left. The
-  `render` camera is left-handed (glam's `lh` look-at and perspective), so +x projects right of the
-  screen centre with no conversion; a test covers it. Meshes keep the C++ winding, which appears
-  clockwise on screen: use `FrontFace::Cw`.
+- The origin is on the foul line in the middle of the lane, with the lane surface at `y = 0`. +z runs
+  down the lane towards the pins, +y is up and +x is the bowler's right.
+- +x appears on the right of the screen, so the Right key moves the ball right. The `render` camera is
+  left-handed (glam's `lh` look-at and perspective), which gives this with no conversion; a test
+  covers it. The meshes keep the C++ winding, which appears clockwise on screen (`FrontFace::Cw`).
 - Rotations are unit quaternions in the order (x, y, z, w).
 - `Pose.position` is the rigid-body origin. For the ball that is its centre. For a pin it is the point
-  on its axis `LANE.pin_origin_height` (0.12 m) above its nominal base. That point is not the centre of
-  mass, which Rapier computes from the collider shape.
+  on its axis 0.12 m (`LANE.pin_origin_height`) above its base, not its centre of mass. The renderer
+  adds `PIN_MESH_OFFSET_Y` along the pin's own up axis to place the pin mesh.
 
-## The scene renderer
+## The render crate
 
-`SceneRenderer` ports the C++ renderer and has two paths. Both draw the same scene: the lit shader
-(GGX key light, hemisphere ambient, up to four point lights, fog, emissive materials, wood and ball
-patterns), the sky gradient behind the opaque geometry and the translucent aim guide. The shaders are
-WGSL in `crates/render/src/shaders`.
+`SceneRenderer` draws the scene that `scene_adapter` builds from a lane snapshot: the lane, the ball,
+the pins, the decor of the current theme and, while aiming, a translucent aim guide. It ports the
+C++ renderer and has two paths.
 
-The full path runs these passes each frame:
+**The full path** adds shadows, the lane reflection and bloom. It runs four passes each frame:
 
-1. Shadow: a 1024x4096 depth map from the key light, fitted to the shadow box.
-2. Reflection: the scene mirrored in the lane plane at half resolution, sampled by the main lane only.
-3. Main: the scene into an `Rgba16Float` target with up to 4x MSAA. A depth pre-pass writes depth only;
-   the lit pass then tests `Equal` against it, so each pixel is lit once. The opaque draws are sorted
-   front to back first. At the end of the pass the hardware resolves the MSAA samples.
-4. Post: a 4-level bloom (bright part, down, up), then ACES tone mapping with the theme's exposure into
-   an 8-bit target.
+1. **Shadow:** a 1024x4096 depth map seen from the key light.
+2. **Reflection:** the scene mirrored in the lane, at half resolution, shown on the lane surface.
+3. **Main:** the scene into a 16-bit floating-point (HDR) image with up to 4x multisampling. A depth
+   pre-pass comes first, so the expensive lighting runs once per pixel.
+4. **Post:** a four-level bloom around bright parts such as the neon strips, then ACES tone mapping
+   with the theme's exposure into the final 8-bit image.
 
-The main pass writes each colour as `c / (1 + max(c))`, so the average of the samples is the weighted
-resolve of the C++ game, which keeps neon and highlight edges smooth. The composite and bloom passes
-undo the weight per texel. `Capabilities::hdr_resolve` says whether the device resolves `Rgba16Float`;
-without it a shader resolve (`resolve.wgsl`) averages the weighted samples instead. A GPU test checks
-that both give the same frame.
+**The basic path** draws only the main pass and tone maps in the same shader. It stays within the
+limits of older GPUs and of wgpu's GL backend.
 
-Known deviation from C++: the translucent aim guide blends over the weighted scene, so it is up
-to about 16 of 255 levels less bright in its cyan than before. Drawing it after the resolve would restore
-that, at the cost of an extra pass and no multisampling on its edges. Where two boxes touch with exactly
-equal depth, a few edge pixels show the other surface than before; they were already z-fighting.
-
-Measured on an Intel UHD (Comet Lake GT2), release build, 1920x1080, full path: Neon 71 frames/s
-(minimum 63), Classic 72, Outdoor 90. The remaining cost is mostly the four point lights in the lit
-shader (about 2.9 ms of GPU time in Neon).
-
-The basic path draws only the main pass and tone maps in the lit shader.
-
-It fits an egui-wgpu paint callback. `prepare` draws the scene into the renderer's own targets, sized
-to the view, and returns the command buffer to submit before egui's pass; `paint` copies the result
-into egui's pass. That pass must have no depth attachment (eframe's default), because the copy
-pipeline has none. A zero-size view draws nothing.
-
-`Capabilities::probe` reads what the device offers, and `choose_path` picks the path.
-`render_mode_from_env` reads `BOWLINGBOX_RENDER`: `basic` (any case) forces the basic path; `full`
-or no value asks for the full path; `render_mode_warning` gives the one line to print for any other
-value. The basic path runs instead of the full one when:
+The renderer picks the path when it starts. `Capabilities::probe` reads what the GPU offers, and
+`choose_path` takes the basic path when:
 
 - `BOWLINGBOX_RENDER=basic` is set;
-- `Rgba16Float` cannot be rendered to and sampled, or the device's texture size is below 4096;
-- a full-path pipeline fails to build (caught in a validation error scope);
-- the targets fail to build at a new view size. The full path then stays off for the rest of the run.
+- the GPU cannot render to and sample a 16-bit float image, or its largest texture is below 4096 px;
+- a full-path pipeline fails to build;
+- the full path's images fail to build at a new window size. The full path then stays off for the
+  rest of the run.
 
-`fallback_reason` gives the reason, and the app prints it once to stderr with a `render: ` prefix,
-for example `render: basic path (BOWLINGBOX_RENDER=basic)`. The basic path stays within wgpu's WebGL2
-downlevel limits, so it also runs on the GL backend. The GPU tests print a note and pass without an
-adapter.
+The app prints the reason once on the error output, for example
+`render: basic path (BOWLINGBOX_RENDER=basic)`.
 
-`FullPathOptions` turns the shadow, reflection and bloom passes off one by one. It is a debug and
-test switch; the app leaves all three on.
+On wgpu's GL backend the full path draws with one sample. wgpu-hal 30 cannot create a multisampled
+image that a shader also reads on GL, so the probe reports one sample there.
 
-`BOWLINGBOX_RENDER_STATS=1` times the passes (`shadow`, `reflection`, `main`, `post`) with
-timestamp queries. The app requests `TIMESTAMP_QUERY` only when the stats are on and the adapter has
-it, and then redraws every frame. The queries rotate through three sets; a set is read only once its
-buffer is mapped, so a frame never waits on the GPU, and a frame that finds no free set goes untimed.
-About once a second the averages go to stderr as in C++, for example
+The shaders are WGSL files in `crates/render/src/shaders`. The lit shader has a GGX key light,
+hemisphere ambient light, up to four point lights, fog, emissive materials and the wood and ball
+patterns.
+
+### Details of the full path
+
+- The main pass writes each colour as `c / (1 + max(c))`. The average of the samples is then the
+  weighted resolve of the C++ game, which keeps the edges of neon strips and highlights smooth. The
+  bloom and composite passes undo the weight. When the GPU cannot resolve 16-bit float images
+  itself (`Capabilities::hdr_resolve`), a shader (`resolve.wgsl`) averages the weighted samples
+  instead. A GPU test checks that both give the same image.
+- The aim guide blends over the weighted scene, so its cyan is up to about 16 of 255 levels darker
+  than in the C++ game. Drawing it after the resolve would fix that, at the cost of an extra pass and
+  of multisampling on its edges.
+- `FullPathOptions` turns the shadow, reflection and bloom passes off one by one, for debugging and
+  tests. The app leaves all three on.
+
+### Measuring the GPU time
+
+`BOWLINGBOX_RENDER_STATS=1` times the four passes with GPU timestamp queries and prints the averages
+about once a second, for example
 `render: shadow 1.99 ms, reflection 0.37 ms, main 10.08 ms, post 4.01 ms (GPU, 31 frames)`. A pass
-that did not run shows 0.00. Without timestamp queries the app prints
-`render stats: timestamp queries not supported by this adapter` once and runs without stats.
+that did not run shows 0.00. The queries rotate through three sets, so a frame never waits for the
+GPU. Without timestamp queries the app prints
+`render stats: timestamp queries not supported by this adapter` once and runs without them.
 
-The app wires it in a few small modules. `scene_adapter` is the one place that turns a lane `Snapshot`
-into a `SceneDescription` (pins sit `PIN_MESH_OFFSET_Y` along their own up axis, aim guide only while
-aiming or charging). `follow_camera` ports the C++ camera rig: home behind the foul line, follows the
-rolling ball, eases back, and lets the window sleep once it is home. `view3d` keeps the renderer in
-egui-wgpu's callback resources and draws it from a paint callback in the central panel. `cli` parses
-`--theme`, `--mute`, `--debug-view` and `--screen` with clap and collects the startup warnings, which
-`main` prints once. The window keeps eframe's defaults (no multisampling, no depth buffer).
+On an Intel UHD (Comet Lake GT2), in a release build at 1920x1080 with the full path, Neon Hall runs at
+71 frames/s (at least 63), Classic Alley at 72 and Outdoor at 90. Most of the remaining time goes to
+the four point lights in the lit shader, about 2.9 ms per frame in Neon Hall.
 
-## HUD, menus and settings
+### How the renderer fits into egui
 
-The 3D view fills the middle of the central panel; the HUD is egui drawing around it, as in the C++ game.
-The modules split into pure logic, which is unit-tested, and drawing:
+The renderer runs inside an egui-wgpu paint callback. `prepare` draws the scene into the renderer's
+own images, sized to the view, and returns a command buffer to submit before egui's pass. `paint`
+then copies the result into egui's pass. That pass must have no depth attachment, which is eframe's
+default. A view of size zero draws nothing.
 
-- `hud_text`: every string the player reads (hints, phase names, `STRIKE!`, `SPARE!`, `Gutter`,
-  `N pins`, `Game over - score N`, the status line, the sound status, the Controls text and the unknown
-  theme message). `throw_result` is the one rule for what a throw was; the sound director uses it too.
-- `hud_layout`: the bands, 18 % of the height on top for the scoreboard and 10 % at the bottom for the
-  power bar, hint and result. The 3D view gets the rest.
-- `scoreboard`: the cell text and the grid geometry. `hud` draws the board and the bottom band from
-  `HudGeometry`, which is recomputed from the area every frame, so everything rescales on resize.
-- `menus` and `dialogs`: the menu bar (Game, View, Sound, Help) with the shortcut text in the labels,
-  and the Controls and About windows. `menus::sound_menu` gives the checked and enabled states as a
-  value, so they are tested without a window.
-- `command`: `route` decides what a key does. A dialog closes on Esc first and blocks the game, theme and
-  sound keys; Release always passes, so a throw never sticks while charging. `menu_click_allowed` does
-  the same for menu clicks. With no dialog, Esc runs Quit.
-- `fonts`: Rubik Medium is embedded and set as egui's proportional font.
-- `settings_store`: reads and writes `sound.muted`, `sound.volume` and `sound.ambience` through eframe's
-  storage, as strings. Each value falls back to its default on its own, and a volume is cut to 0 to 100.
-  `SoundControl::persisted` writes the stored mute value while only `--mute` muted the session. The
-  theme is not stored, as in C++. `App::save` is the `eframe::App` method; `RedrawAlways` forwards it.
-- `screen`: the `--screen=<name>` hook (`game`, `controls`, `about`, `sound-menu`, `theme-classic`,
-  `theme-outdoor`). It sets the start state only: an open dialog, the Sound menu drawn open, a theme.
-  The screenshot tool of the manual drives it.
-- `capture`: `--capture=<path>`. `Capture` is the pure state machine (at least 10 frames and the follow
-  camera home, then one screenshot request, then write); `Run` is its egui glue (`ViewportCommand::Screenshot`
-  with a callback), and `write_png` writes a temporary file and renames it. A capture run uses
-  `SilentOutput`, saves nothing and exits 1 with `capture failed: <reason>` on any error.
+## The audio crate
 
-`app/acceptance.rs` holds the smoke tests of the acceptance list; see
+`bowlingbox-audio` embeds the 13 WAV files of the C++ game (`crates/audio/sounds/`; where each came
+from is in `SOURCES.md`) and lists them in a catalogue (`SoundId`, with a loop flag).
+
+`AudioOutput` is the interface the app plays through: `play`, `set_loop` for the three loop slots
+(rolling, charging, ambience), mute and master volume. `KiraOutput` plays on the default sound device.
+`SilentOutput` plays nothing. `open_output()` returns the kira output, or the silent one and the
+message `sound disabled: <reason>` when no device opens. The game then runs without sound.
+
+## The app
+
+The app's modules fall into logic, which has unit tests, and drawing.
+
+**Input and commands**
+
+- `input` maps keys and mouse actions to commands; `lane_commands` applies them to the lane.
+- `command::route` decides what a key does. An open dialog takes Esc first and blocks the game,
+  theme and sound keys. Release always passes, so a throw never sticks while charging.
+  `menu_click_allowed` applies the same rule to menu clicks. With no dialog open, Esc quits.
+
+**HUD, menus and dialogs**
+
+- `hud_text` holds every string the player reads: hints, phase names, `STRIKE!`, `SPARE!`, `Gutter`,
+  the status line, the Controls text. `throw_result` is the one rule for what a throw was; the sound
+  director uses it too.
+- `hud_layout` splits the window: 18 % of the height on top for the scoreboard, 10 % at the bottom for
+  the power bar, hint and result, the rest for the 3D view. `scoreboard` computes the cell text and the
+  grid, and `hud` draws them. The geometry is computed again every frame, so everything rescales with
+  the window.
+- `menus` builds the menu bar (Game, View, Sound, Help) and `dialogs` the Controls and About windows.
+  `menus::sound_menu` returns the checked and enabled states as a value, so they are tested without a
+  window.
+- `fonts` embeds Rubik Medium and makes it egui's main font.
+
+**Sound**
+
+- `sound_director` turns lane snapshots, the score sheet and the impacts into sound cues. Its tests
+  use a recording output instead of a speaker.
+- `sound_settings` holds mute, volume and ambience. `theme_sounds` picks the ambience of a theme.
+- `sound_control` joins them. It applies the sound commands, steps the lane for the frame and drains
+  the impacts every frame, also while muted, so that no backlog builds up.
+
+**Settings**
+
+`settings_store` saves `sound.muted`, `sound.volume` and `sound.ambience` through eframe's storage.
+Each value falls back to its default on its own, and a volume outside 0 to 100 is clamped. `--mute`
+mutes only the current session and is not saved. The theme is not saved, as in the C++ game. egui's
+own memory, which includes the zoom, is not saved either.
+
+**3D view and camera**
+
+- `scene_adapter` is the one place that turns a lane snapshot into a `SceneDescription`.
+- `follow_camera` ports the C++ camera: home behind the foul line, following the rolling ball,
+  easing back. It reports when it is home, so the window can sleep.
+- `view3d` keeps the renderer in egui-wgpu's callback resources and draws it in the central panel.
+
+**Command line and screenshots**
+
+- `cli` parses `--theme`, `--mute`, `--debug-view`, `--screen` and `--capture` with clap and collects
+  the startup warnings, which `main` prints once.
+- `screen` opens a named screen for the manual (`game`, `controls`, `about`, `sound-menu`,
+  `theme-classic`, `theme-outdoor`): an open dialog, the Sound menu drawn open, or a theme.
+- `capture` takes the manual's screenshots for `cargo bk manual capture`. After at least 10 frames,
+  once the camera is home, it requests one screenshot, writes it to a temporary PNG and renames it to
+  the requested path. A capture run plays no sound, saves nothing, and on any error prints
+  `capture failed: <reason>` and exits with 1.
+
+`app/acceptance.rs` holds the automated part of the acceptance checklist; see
 [ACCEPTANCE.md](ACCEPTANCE.md).
-
-## Audio
-
-`bowlingbox-audio` embeds the 13 WAV files of the C++ game (`crates/audio/sounds/`, provenance in
-`SOURCES.md`) and describes them in a catalogue (`SoundId`, loop flag). `AudioOutput` is the seam:
-`play`, `set_loop` for the three loop slots (roll, charge, ambient), mute and master volume.
-`KiraOutput` plays through the default device; `SilentOutput` plays nothing. `open_output()` gives
-the kira output, or the silent one plus the text `sound disabled: <reason>` when no device opens;
-`main` prints that text once to stderr.
-
-In the app, `sound_director` turns lane snapshots, the score sheet and the physics impacts into cues
-(pure logic, tested with a recording output). `sound_settings` holds mute, volume and ambience;
-`theme_sounds` maps a theme to its ambience; `sound_control` joins them: it applies sound commands to
-the output, steps the lane for a frame, drains the lane's impacts every frame (also while muted, so
-no backlog builds up) and hands them to the director with the summed step time. The window owns the
-output and shows `volume NN %` or `sound muted` in the status bar.
 
 ## Dependencies
 
-- `bowlingbox-score` has no dependencies, so it builds and tests without a window or a GPU.
-- `bowlingbox` (the app) uses `bowlingbox-lane` for the throw, `bowlingbox-score` for the sheet,
-  `bowlingbox-render` for the 3D view, `clap` for the command line, `glam` for the scene types, and
-  `eframe` for the window. `eframe` runs with the wgpu renderer and default features off; only `wgpu`,
-  `default_fonts`, `wayland`, `x11`, `accesskit` and `persistence` are on. The app also names `winit` to switch on
-  `wayland-csd-adwaita`, so GNOME on Wayland gets a title bar.
-- `buildkit` is a build dependency of the app. It supplies the version string that `--version` and the
-  About window show.
-- `bowlingbox-render` depends on `glam`, `bytemuck` and `wgpu`. The workspace pins `wgpu` to the
-  version eframe's `egui-wgpu` uses, so the tree has one wgpu.
-- `bowlingbox-lane` depends on `bowlingbox-score` and `rapier3d`. `render` and `audio` depend on
-  neither `lane` nor each other.
-- `bowlingbox-audio` depends on `kira` (cpal backend only) and `hound`, and on none of our crates. On
-  Linux, cpal needs the ALSA headers at build time (`libasound2-dev`) and the ALSA runtime library at
-  run time, which desktop Linux systems have.
-- The dev profile builds `rapier3d` and `parry3d` with `opt-level = 3`, so a debug build simulates in
-  real time.
+| Crate | Depends on |
+| --- | --- |
+| `bowlingbox-score` | nothing |
+| `bowlingbox-lane` | `bowlingbox-score`, `rapier3d` |
+| `bowlingbox-render` | `wgpu`, `glam`, `bytemuck` |
+| `bowlingbox-audio` | `kira` (cpal backend only), `hound` |
+| `bowlingbox` | the four crates above, `eframe`, `clap`, `glam`; `buildkit` at build time |
+
+- `eframe` runs with the wgpu renderer and its default features off. Only `wgpu`, `default_fonts`,
+  `wayland`, `x11`, `accesskit` and `persistence` are on. The app also names `winit` to switch on
+  `wayland-csd-adwaita`, so GNOME on Wayland draws a title bar.
+- The workspace pins `wgpu` to the version that eframe's `egui-wgpu` uses, so the build has one wgpu.
+- `buildkit` supplies the version that `--version` and the About window show.
+- On Linux, cpal needs the ALSA headers to build (`libasound2-dev`) and the ALSA library at run time,
+  which desktop Linux systems have.
+- The dev profile builds `rapier3d` and `parry3d` with `opt-level = 3`, so a debug build still
+  simulates in real time.
 
 ## Decisions
 
-- **Rust port of the 3D game only.** The C++ console and display apps, and the `Core` library, stay in the
-  C++ repository. Rust's `Result` replaces `Core`.
-- **Score as its own crate.** The rules need no window, GPU or audio device, so they are tested without one.
-- **eframe with the wgpu backend.** We write our own renderer instead of using Bevy. Bevy would save
-  rendering code but would impose its architecture, slow the builds and break about every three months.
-- **Rapier for physics and kira for audio.** Rapier came with the lane; kira comes with the sound. The
-  throw is retuned, because Rapier does not reproduce the C++ numbers.
-- **Separate repository, Beta flow.** `Bowlingbox_R` is public from its first commit. Features merge into
-  `Beta`, which releases `v2.0.0-beta.N`. Promoting `Beta` to `main` releases `v2.0.0`.
+- **Only the 3D game is ported.** The C++ console app, the score display app and the `Core` library
+  stay in the C++ repository. Rust's `Result` replaces `Core`.
+- **The scoring rules are their own crate.** They need no window, GPU or sound device, so they are
+  tested without one.
+- **eframe with our own wgpu renderer, not Bevy.** Bevy would save rendering code, but it would
+  impose its architecture, slow the builds and break about every three months.
+- **Rapier for physics, kira for sound.** The throw was tuned again for Rapier, because Rapier does not
+  reproduce the C++ game's Bullet numbers.
+- **A separate repository with a Beta branch.** Features merge into `Beta`, which releases
+  `v2.0.0-beta.N`. Promoting `Beta` to `main` releases the stable version.
