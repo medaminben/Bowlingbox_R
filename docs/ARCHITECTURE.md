@@ -70,6 +70,31 @@ eframe calls `App::ui` once per frame. In order, it:
 5. **Sleeps when nothing moves.** While the game waits for a throw and the camera is home, the app
    stops requesting frames, and the window draws nothing until the next input.
 
+```mermaid
+sequenceDiagram
+    participant E as eframe
+    participant A as App
+    participant S as sound_control
+    participant L as Lane
+    participant D as sound_director
+    participant C as follow_camera
+    participant R as SceneRenderer
+    E->>A: ui() once per frame
+    A->>A: read input, route commands
+    A->>A: fixed_step: whole steps of 1/60 s
+    A->>S: step_frame(steps)
+    loop each step
+        S->>L: step(1/60 s)
+    end
+    S->>L: snapshot, drain_impacts
+    S->>D: snapshot, score sheet, impacts
+    D-->>S: sound cues to the output
+    S-->>A: snapshot
+    A->>C: update(snapshot)
+    A->>R: scene from scene_adapter, in a paint callback
+    A->>E: request a repaint unless idle
+```
+
 ## The score crate
 
 `bowlingbox-score` has no dependencies. It exports:
@@ -97,9 +122,54 @@ nothing when the phase does not allow them. `step(dt)` advances the timers and t
 `snapshot` tells the rest of the program what the lane shows right now: the phase, the poses of the
 ball and pins, the aim and the power.
 
+```mermaid
+stateDiagram-v2
+    [*] --> Aiming
+    Aiming --> Charging: start_charge
+    Charging --> Rolling: release launches the ball
+    Rolling --> Settling: ball in the pit, ball stopped, or timeout
+    Settling --> FrameDone: all bodies slow or timeout, the roll is scored
+    FrameDone --> Aiming: next ball
+    FrameDone --> GameOver: after the tenth frame
+    GameOver --> Aiming: new_game
+```
+
+While `Charging`, the power swings between 0 and 1 as a cosine; `release` turns it into the launch
+speed. `move_aim` and `rotate_aim` work while `Aiming` or `Charging`. `new_game` works from any phase.
+
 The physics sits behind the `PhysicsWorld` trait, which knows no bowling rules. That keeps `Lane`
 testable with a scripted fake world. The real one, `RapierWorld`, runs fixed sub-steps of 1/120 s,
 at most four per `step` call. `Lane::default()` is the game: a `RapierWorld` and a `ScoreCalculator`.
+
+```mermaid
+classDiagram
+    class Lane {
+        move_aim()
+        rotate_aim()
+        start_charge()
+        release()
+        new_game()
+        step(dt)
+        snapshot() Snapshot
+        drain_impacts()
+    }
+    class PhysicsWorld {
+        <<trait>>
+        launch_ball()
+        step(dt)
+        rebuild()
+    }
+    class Game {
+        <<trait>>
+        roll(pins)
+        reset()
+    }
+    Lane --> PhysicsWorld : drives
+    Lane --> Game : scores with
+    PhysicsWorld <|.. RapierWorld
+    PhysicsWorld <|.. FakeWorld : tests
+    Game <|.. ScoreCalculator
+```
 
 The physics is tuned by hand, because Rapier does not reproduce the C++ game's Bullet numbers. The
 constants `POCKET_OFFSET`, `POCKET_ANGLE_DEG` and `POCKET_POWER` describe a throw that usually strikes;
@@ -138,6 +208,22 @@ C++ renderer and has two paths.
 4. **Post:** a four-level bloom around bright parts such as the neon strips, then ACES tone mapping
    with the theme's exposure into the final 8-bit image.
 
+```mermaid
+flowchart LR
+    shadow["Shadow map<br/>1024x4096 depth"]
+    refl["Reflection<br/>half resolution"]
+    main["Main pass<br/>HDR, up to 4x MSAA"]
+    resolve["Resolve, with MSAA<br/>hardware or shader"]
+    bloom["Bloom<br/>4 levels"]
+    comp["Composite<br/>ACES tone map"]
+    egui["egui pass<br/>copy into the window"]
+    shadow --> main
+    refl --> main
+    main --> resolve --> bloom --> comp
+    resolve --> comp
+    comp --> egui
+```
+
 **The basic path** draws only the main pass and tone maps in the same shader. It stays within the
 limits of older GPUs and of wgpu's GL backend.
 
@@ -149,6 +235,20 @@ The renderer picks the path when it starts. `Capabilities::probe` reads what the
 - a full-path pipeline fails to build;
 - the full path's images fail to build at a new window size. The full path then stays off for the
   rest of the run.
+
+```mermaid
+flowchart TD
+    start([renderer starts]) --> env{"BOWLINGBOX_RENDER=basic?"}
+    env -- yes --> basic[basic path]
+    env -- no --> caps{"16-bit float target<br/>and 4096 px textures?"}
+    caps -- no --> basic
+    caps -- yes --> build{"full-path pipelines build?"}
+    build -- no --> basic
+    build -- yes --> full[full path]
+    full --> resize{"targets build at<br/>the new window size?"}
+    resize -- yes --> full
+    resize -- no --> basic
+```
 
 The app prints the reason once on the error output, for example
 `render: basic path (BOWLINGBOX_RENDER=basic)`.
@@ -202,6 +302,16 @@ from is in `SOURCES.md`) and lists them in a catalogue (`SoundId`, with a loop f
 (rolling, charging, ambience), mute and master volume. `KiraOutput` plays on the default sound device.
 `SilentOutput` plays nothing. `open_output()` returns the kira output, or the silent one and the
 message `sound disabled: <reason>` when no device opens. The game then runs without sound.
+
+```mermaid
+flowchart LR
+    lane["Lane<br/>snapshot and impacts"] --> director["sound_director<br/>cues"]
+    settings["sound_settings<br/>mute, volume, ambience"] --> control
+    director --> control["sound_control"]
+    control --> out{{"AudioOutput"}}
+    out --> kira["KiraOutput<br/>sound device"]
+    out --> silent["SilentOutput<br/>no device, capture runs"]
+```
 
 ## The app
 
