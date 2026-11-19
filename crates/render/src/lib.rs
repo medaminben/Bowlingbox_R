@@ -31,8 +31,8 @@ pub use geometry::{
     MeshData, box_data, cone_data, cylinder_data, lathe_data, pin_data, sphere_data,
 };
 pub use gpu::{
-    Capabilities, FullPathOptions, RenderMode, SceneRenderer, choose_path, render_mode_from_env,
-    render_mode_warning,
+    Capabilities, FrameSizes, FullPathOptions, RenderMode, SceneRenderer, choose_path,
+    render_mode_from_env, render_mode_warning,
 };
 pub use lighting::{
     LightFrustum, SHADOW_TOP_Y, fit_light_frustum, linear_to_srgb, linear_to_srgb_vec3,

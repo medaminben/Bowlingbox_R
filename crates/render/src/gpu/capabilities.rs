@@ -166,6 +166,32 @@ mod tests {
     }
 
     #[test]
+    fn an_invalid_creation_inside_the_scope_is_an_error() {
+        let Some(device) = crate::gpu::test_device() else {
+            return;
+        };
+        let empty = || {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("empty"),
+                size: wgpu::Extent3d {
+                    width: 0,
+                    height: 0,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: HDR_FORMAT,
+                usage: TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            })
+        };
+        let error = catch_errors(&device, empty).expect_err("a zero-size texture is invalid");
+        assert!(!error.contains('\n'), "{error}");
+        assert_eq!(catch_errors(&device, || 7), Ok(7));
+    }
+
+    #[test]
     fn error_text_is_joined_onto_one_line() {
         assert_eq!(
             one_line("Validation Error\n\nCaused by:\n  bad format\n"),

@@ -36,6 +36,7 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const TOLERANCE: i32 = 3;
 
 struct Gpu {
+    adapter: wgpu::Adapter,
     device: wgpu::Device,
     queue: wgpu::Queue,
     caps: Capabilities,
@@ -59,16 +60,26 @@ fn adapter() -> Option<wgpu::Adapter> {
     Some(adapter)
 }
 
-fn device(adapter: &wgpu::Adapter, limits: wgpu::Limits) -> Option<Gpu> {
+fn device(adapter: wgpu::Adapter, limits: wgpu::Limits) -> Option<Gpu> {
+    device_with(adapter, limits, wgpu::Features::empty())
+}
+
+fn device_with(
+    adapter: wgpu::Adapter,
+    limits: wgpu::Limits,
+    features: wgpu::Features,
+) -> Option<Gpu> {
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("gpu full"),
+        required_features: features,
         required_limits: limits,
         ..Default::default()
     }))
     .map_err(|err| eprintln!("note: device request failed ({err}); skipping the full-path test"))
     .ok()?;
-    let caps = Capabilities::probe(adapter, &device);
+    let caps = Capabilities::probe(&adapter, &device);
     Some(Gpu {
+        adapter,
         device,
         queue,
         caps,
@@ -78,8 +89,15 @@ fn device(adapter: &wgpu::Adapter, limits: wgpu::Limits) -> Option<Gpu> {
 /// A device with all the adapter's limits, as the app requests; `None` (with a note) when the
 /// adapter cannot run the full path.
 fn full_gpu() -> Option<Gpu> {
+    full_gpu_with(wgpu::Features::empty())
+}
+
+/// As `full_gpu`, with those of `features` the adapter has.
+fn full_gpu_with(features: wgpu::Features) -> Option<Gpu> {
     let adapter = adapter()?;
-    let gpu = device(&adapter, adapter.limits())?;
+    let limits = adapter.limits();
+    let features = features & adapter.features();
+    let gpu = device_with(adapter, limits, features)?;
     println!("capabilities: {:?}", gpu.caps);
     if let Err(reason) = choose_path(RenderMode::Full, &gpu.caps) {
         println!("note: {reason}; skipping the full-path test");
@@ -89,6 +107,11 @@ fn full_gpu() -> Option<Gpu> {
 }
 
 fn full_renderer(gpu: &Gpu, samples: u32, id: ThemeId) -> SceneRenderer {
+    full_renderer_with(gpu, &gpu.caps, samples, id)
+}
+
+/// A full-path renderer built with `caps` in place of the probed capabilities.
+fn full_renderer_with(gpu: &Gpu, caps: &Capabilities, samples: u32, id: ThemeId) -> SceneRenderer {
     let renderer = SceneRenderer::new(
         &gpu.device,
         &gpu.queue,
@@ -97,7 +120,7 @@ fn full_renderer(gpu: &Gpu, samples: u32, id: ThemeId) -> SceneRenderer {
         G,
         id,
         RenderMode::Full,
-        &gpu.caps,
+        caps,
     );
     assert_eq!(
         renderer.path(),
@@ -125,12 +148,15 @@ fn empty_scene() -> SceneDescription {
 }
 
 struct Image {
+    width: u32,
+    /// Bytes per row, padded to wgpu's copy alignment.
+    stride: u32,
     pixels: Vec<u8>,
 }
 
 impl Image {
     fn at(&self, x: u32, y: u32) -> [i32; 3] {
-        let i = ((y * W + x) * 4) as usize;
+        let i = (y * self.stride + x * 4) as usize;
         [
             i32::from(self.pixels[i]),
             i32::from(self.pixels[i + 1]),
@@ -139,12 +165,12 @@ impl Image {
     }
 }
 
-fn target(gpu: &Gpu, samples: u32, usage: wgpu::TextureUsages) -> wgpu::Texture {
+fn target(gpu: &Gpu, size: [u32; 2], samples: u32, usage: wgpu::TextureUsages) -> wgpu::Texture {
     gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("full target"),
         size: wgpu::Extent3d {
-            width: W,
-            height: H,
+            width: size[0],
+            height: size[1],
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
@@ -165,13 +191,28 @@ fn render(
     camera: &Camera,
     scene: &SceneDescription,
 ) -> Image {
-    let target = target(gpu, 1, wgpu::TextureUsages::COPY_SRC);
+    render_at(gpu, renderer, samples, camera, scene, [W, H]).expect("a 320x180 frame")
+}
+
+/// As `render`, for a view of `view` pixels; the target is that size, clamped to the device's
+/// limit. `None` when `prepare` draws nothing.
+fn render_at(
+    gpu: &Gpu,
+    renderer: &mut SceneRenderer,
+    samples: u32,
+    camera: &Camera,
+    scene: &SceneDescription,
+    view: [u32; 2],
+) -> Option<Image> {
+    let scene_commands = renderer.prepare(&gpu.device, &gpu.queue, camera, scene, view)?;
+    let max = gpu.device.limits().max_texture_dimension_2d;
+    let size = view.map(|side| side.min(max));
+    let target = target(gpu, size, 1, wgpu::TextureUsages::COPY_SRC);
     let view = target.create_view(&wgpu::TextureViewDescriptor::default());
     let multisampled = (samples > 1).then(|| {
-        self::target(gpu, samples, wgpu::TextureUsages::empty())
+        self::target(gpu, size, samples, wgpu::TextureUsages::empty())
             .create_view(&wgpu::TextureViewDescriptor::default())
     });
-    let scene_commands = renderer.prepare(&gpu.device, &gpu.queue, camera, scene, [W, H]);
     let mut encoder = gpu
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
@@ -193,10 +234,10 @@ fn render(
             .forget_lifetime();
         renderer.paint(&mut pass);
     }
-    let bytes_per_row = W * 4;
+    let stride = (size[0] * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
     let readback = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("full readback"),
-        size: u64::from(bytes_per_row * H),
+        size: u64::from(stride * size[1]),
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
@@ -211,18 +252,17 @@ fn render(
             buffer: &readback,
             layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(bytes_per_row),
-                rows_per_image: Some(H),
+                bytes_per_row: Some(stride),
+                rows_per_image: Some(size[1]),
             },
         },
         wgpu::Extent3d {
-            width: W,
-            height: H,
+            width: size[0],
+            height: size[1],
             depth_or_array_layers: 1,
         },
     );
-    gpu.queue
-        .submit(scene_commands.into_iter().chain([encoder.finish()]));
+    gpu.queue.submit([scene_commands, encoder.finish()]);
     let slice = readback.slice(..);
     slice.map_async(wgpu::MapMode::Read, |result| result.expect("map readback"));
     gpu.device
@@ -230,7 +270,11 @@ fn render(
         .expect("poll");
     let pixels = slice.get_mapped_range().expect("mapped range").to_vec();
     readback.unmap();
-    Image { pixels }
+    Some(Image {
+        width: size[0],
+        stride,
+        pixels,
+    })
 }
 
 fn aces(x: f32) -> f32 {
@@ -265,33 +309,85 @@ fn lane_camera() -> Camera {
     camera
 }
 
+/// The lane is lit and in front of the sky, and the sky is the C++ gradient through the tone map.
+fn assert_lane_and_sky(gpu: &Gpu, renderer: &mut SceneRenderer, samples: u32, id: ThemeId) {
+    let lane = render(gpu, renderer, samples, &lane_camera(), &empty_scene());
+    let centre = lane.at(W / 2, H / 2);
+    assert!(
+        !close(centre, sky_bytes(id, H / 2)),
+        "{id:?}, {samples} samples: centre {centre:?} is sky"
+    );
+    assert!(
+        centre.iter().sum::<i32>() > 60,
+        "{id:?}, {samples} samples: centre {centre:?} is black"
+    );
+
+    let sky = render(gpu, renderer, samples, &sky_camera(), &empty_scene());
+    for y in [0, H / 2, H - 1] {
+        for x in [0, W / 2, W - 1] {
+            let got = sky.at(x, y);
+            let want = sky_bytes(id, y);
+            assert!(
+                close(got, want),
+                "{id:?}, {samples} samples: sky at ({x}, {y}) {got:?}, want {want:?}"
+            );
+        }
+    }
+}
+
 #[test]
 fn every_theme_draws_the_lane_in_front_of_the_sky() {
     let Some(gpu) = full_gpu() else { return };
     for id in THEMES {
         let mut renderer = full_renderer(&gpu, 1, id);
-        let lane = render(&gpu, &mut renderer, 1, &lane_camera(), &empty_scene());
-        let centre = lane.at(W / 2, H / 2);
-        assert!(
-            !close(centre, sky_bytes(id, H / 2)),
-            "{id:?}: centre {centre:?} is sky"
-        );
-        assert!(
-            centre.iter().sum::<i32>() > 60,
-            "{id:?}: centre {centre:?} is black"
-        );
+        assert_lane_and_sky(&gpu, &mut renderer, 1, id);
+    }
+}
 
-        let sky = render(&gpu, &mut renderer, 1, &sky_camera(), &empty_scene());
-        for y in [0, H / 2, H - 1] {
-            for x in [0, W / 2, W - 1] {
-                let got = sky.at(x, y);
-                let want = sky_bytes(id, y);
-                assert!(
-                    close(got, want),
-                    "{id:?}: sky at ({x}, {y}) {got:?}, want {want:?}"
-                );
-            }
+/// The device can multisample both HDR targets twice: WebGPU guarantees only 1 and 4 samples,
+/// so this needs the adapter's own format features.
+fn two_samples_supported(gpu: &Gpu) -> bool {
+    gpu.device
+        .features()
+        .contains(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES)
+        && [
+            wgpu::TextureFormat::Rgba16Float,
+            wgpu::TextureFormat::Depth32Float,
+        ]
+        .iter()
+        .all(|&format| {
+            gpu.adapter
+                .get_texture_format_features(format)
+                .flags
+                .contains(wgpu::TextureFormatFeatureFlags::MULTISAMPLE_X2)
+        })
+}
+
+#[test]
+fn one_and_two_sample_main_passes_draw_the_lane_and_sky() {
+    let Some(gpu) = full_gpu_with(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES) else {
+        return;
+    };
+    for samples in [1, 2] {
+        if samples == 2 && !two_samples_supported(&gpu) {
+            println!("note: no {samples}x MSAA for the HDR targets; skipping that count");
+            continue;
         }
+        // One sample has no MSAA target and no resolve pass; the composite reads the main pass.
+        let caps = Capabilities {
+            hdr_msaa_samples: samples,
+            ..gpu.caps
+        };
+        let scope = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        for id in THEMES {
+            let mut renderer = full_renderer_with(&gpu, &caps, 1, id);
+            assert_lane_and_sky(&gpu, &mut renderer, 1, id);
+        }
+        let error = pollster::block_on(scope.pop());
+        assert!(
+            error.is_none(),
+            "{samples} samples: validation error {error:?}"
+        );
     }
 }
 
@@ -478,7 +574,7 @@ fn a_zero_size_rect_draws_nothing() {
 #[test]
 fn a_webgl2_limited_device_falls_back_to_the_basic_path_with_a_reason() {
     let Some(adapter) = adapter() else { return };
-    let Some(gpu) = device(&adapter, wgpu::Limits::downlevel_webgl2_defaults()) else {
+    let Some(gpu) = device(adapter, wgpu::Limits::downlevel_webgl2_defaults()) else {
         return;
     };
     let renderer = SceneRenderer::new(
@@ -500,7 +596,8 @@ fn a_webgl2_limited_device_falls_back_to_the_basic_path_with_a_reason() {
 #[test]
 fn the_basic_mode_reports_the_environment_variable() {
     let Some(adapter) = adapter() else { return };
-    let Some(gpu) = device(&adapter, adapter.limits()) else {
+    let limits = adapter.limits();
+    let Some(gpu) = device(adapter, limits) else {
         return;
     };
     let renderer = SceneRenderer::new(
@@ -518,4 +615,118 @@ fn the_basic_mode_reports_the_environment_variable() {
         renderer.fallback_reason(),
         Some("basic path (BOWLINGBOX_RENDER=basic)")
     );
+}
+
+#[test]
+fn neon_strips_bloom_onto_the_masking_unit_around_them() {
+    let Some(gpu) = full_gpu() else { return };
+    let mut renderer = full_renderer(&gpu, 1, ThemeId::NeonHall);
+    // Level with the cyan strip along the masking unit's lower edge (y = 0.9, centred on its
+    // face), a few metres in front of it.
+    let face_z = G.lane_length + 0.05;
+    let mut camera = Camera::default();
+    camera.look_at(
+        Vec3::new(0.0, 1.0, face_z - 3.0),
+        Vec3::new(0.0, 1.0, face_z),
+    );
+    camera.set_viewport(W, H);
+    let scene = empty_scene();
+    renderer.set_full_path_options(FullPathOptions {
+        bloom: false,
+        ..FullPathOptions::default()
+    });
+    let plain = render(&gpu, &mut renderer, 1, &camera, &scene);
+    renderer.set_full_path_options(FullPathOptions::default());
+    let bloomed = render(&gpu, &mut renderer, 1, &camera, &scene);
+    // On the masking unit's dark face, just above the strip.
+    let (x, y) = pixel(&camera, Vec3::new(0.3, 0.9 + 0.15, face_z));
+    let (with, without) = (bloomed.at(x, y), plain.at(x, y));
+    assert!(
+        brightness(with) >= brightness(without) + 30,
+        "({x}, {y}): {with:?} with bloom, {without:?} without"
+    );
+}
+
+/// One frame at `view` inside a validation scope; `None` when the view is empty.
+fn checked_frame(gpu: &Gpu, renderer: &mut SceneRenderer, view: [u32; 2]) -> Option<Image> {
+    let scope = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let mut camera = lane_camera();
+    camera.set_viewport(view[0].max(1), view[1].max(1));
+    let image = render_at(gpu, renderer, 1, &camera, &racked_pins(), view);
+    let error = pollster::block_on(scope.pop());
+    assert!(error.is_none(), "{view:?}: validation error {error:?}");
+    image
+}
+
+#[test]
+fn the_full_path_follows_the_view_through_every_size() {
+    let Some(gpu) = full_gpu() else { return };
+    let mut renderer = full_renderer(&gpu, 1, ThemeId::NeonHall);
+    // The bloom chain's last levels reach 1 px at the smallest sizes.
+    for view in [[320, 180], [64, 36], [0, 0], [800, 450], [20, 12], [1, 1]] {
+        let image = checked_frame(&gpu, &mut renderer, view);
+        assert_eq!(
+            renderer.path(),
+            RenderMode::Full,
+            "{view:?}: {:?}",
+            renderer.fallback_reason()
+        );
+        match image {
+            None => assert!(view.contains(&0), "{view:?} drew nothing"),
+            Some(image) => {
+                assert!(!view.contains(&0), "{view:?} drew a frame");
+                let centre = image.at(image.width / 2, view[1] / 2);
+                assert!(
+                    brightness(centre) > 0,
+                    "{view:?}: centre {centre:?} is black"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn targets_that_fail_at_a_new_size_switch_to_the_basic_path_for_good() {
+    let Some(adapter) = adapter() else { return };
+    let limits = wgpu::Limits {
+        max_texture_dimension_2d: 4096,
+        ..adapter.limits()
+    };
+    let Some(gpu) = device(adapter, limits) else {
+        return;
+    };
+    if let Err(reason) = choose_path(RenderMode::Full, &gpu.caps) {
+        println!("note: {reason}; skipping the full-path test");
+        return;
+    }
+    // Capabilities that promise more than the device allows: the full path's targets are made at
+    // 5000 px and fail, as a target that cannot be allocated at a new size would.
+    let caps = Capabilities {
+        max_texture_2d: 8192,
+        ..gpu.caps
+    };
+    let mut renderer = full_renderer_with(&gpu, &caps, 1, ThemeId::NeonHall);
+    assert!(checked_frame(&gpu, &mut renderer, [320, 180]).is_some());
+    assert_eq!(renderer.path(), RenderMode::Full);
+
+    let wide = checked_frame(&gpu, &mut renderer, [5000, 180]).expect("a frame");
+    assert_eq!(renderer.path(), RenderMode::Basic);
+    let reason = renderer
+        .fallback_reason()
+        .expect("a fallback reason")
+        .to_owned();
+    assert!(
+        reason.starts_with("offscreen targets incomplete at 5000x180 (")
+            && reason.ends_with("); using the basic path"),
+        "{reason}"
+    );
+    assert!(brightness(wide.at(wide.width / 2, 90)) > 0);
+
+    // The basic path keeps drawing, at the old size too, and the reason stays the same.
+    for view in [[320, 180], [5000, 180]] {
+        let image = checked_frame(&gpu, &mut renderer, view).expect("a frame");
+        assert!(brightness(image.at(image.width / 2, 90)) > 0, "{view:?}");
+        assert_eq!(renderer.path(), RenderMode::Basic);
+        assert_eq!(renderer.fallback_reason(), Some(reason.as_str()));
+    }
 }

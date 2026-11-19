@@ -8,6 +8,7 @@ use super::meshes::{MeshKind, Meshes};
 use super::pipelines::{
     DEPTH_FORMAT, DRAW_FLOATS, DRAW_STRIDE, FRAME_FLOATS, Pipelines, SCENE_FORMAT, ScenePipelines,
 };
+use super::targets::FrameSizes;
 use crate::camera::Camera;
 use crate::decor::{Prop, Shape, build_props};
 use crate::lighting::{
@@ -112,6 +113,8 @@ pub struct SceneRenderer {
     targets: Option<Targets>,
     /// The full path while it runs; `None` on the basic path.
     full: Option<FullPath>,
+    /// The longest side the full path's targets get (`Capabilities::max_texture_2d`).
+    full_max_side: u32,
     full_options: FullPathOptions,
     /// Why the basic path runs, without the `render: ` prefix.
     fallback: Option<String>,
@@ -181,6 +184,7 @@ impl SceneRenderer {
             opaque_count: 0,
             targets: None,
             full,
+            full_max_side: caps.max_texture_2d,
             full_options: FullPathOptions::default(),
             fallback,
             ready: false,
@@ -236,6 +240,11 @@ impl SceneRenderer {
         self.full.is_some() && self.full_options.reflection
     }
 
+    /// The full path runs the bloom chain this frame (C++: only at a strength above 0).
+    fn bloom(&self) -> bool {
+        self.full.is_some() && self.full_options.bloom && self.theme.bloom_strength > 0.0
+    }
+
     /// Draws the scene at `size_px` (the view's size in physical pixels) into the renderer's
     /// targets and returns the commands to submit before the pass that `paint` draws into. The
     /// camera's aspect is taken from `size_px`. A zero-size view draws nothing and returns `None`.
@@ -247,23 +256,34 @@ impl SceneRenderer {
         scene: &SceneDescription,
         size_px: [u32; 2],
     ) -> Option<wgpu::CommandBuffer> {
-        let Some(size) = drawable_size(size_px, device.limits().max_texture_dimension_2d) else {
+        if size_px.contains(&0) {
             self.ready = false;
             return None;
+        }
+        // A target that fails at a new size (C++ `ensureSize`) ends the full path for good.
+        if let Some(full) = &mut self.full {
+            let sizes = FrameSizes::new(drawable_size(size_px, self.full_max_side));
+            if let Err(error) = full.ensure_targets(device, sizes, &self.pipelines.blit_layout) {
+                let [w, h] = sizes.scene;
+                self.fallback = Some(format!(
+                    "offscreen targets incomplete at {w}x{h} ({error}); using the basic path"
+                ));
+                self.full = None;
+            }
+        }
+        let size = if let Some(full) = &self.full {
+            let strength = if self.bloom() {
+                self.theme.bloom_strength
+            } else {
+                0.0
+            };
+            full.write_post(queue, self.theme.exposure, strength);
+            full.targets().map_or(size_px, |t| t.sizes.scene)
+        } else {
+            let size = drawable_size(size_px, device.limits().max_texture_dimension_2d);
+            self.ensure_targets(device, size);
+            size
         };
-        if let Some(full) = &mut self.full
-            && let Err(error) = full.ensure_targets(device, size, &self.pipelines.blit_layout)
-        {
-            self.fallback = Some(format!(
-                "offscreen targets incomplete at {}x{} ({error}); using the basic path",
-                size[0], size[1]
-            ));
-            self.full = None;
-        }
-        match &self.full {
-            Some(full) => full.write_post(queue, self.theme.exposure),
-            None => self.ensure_targets(device, size),
-        }
         let mut camera = *camera;
         camera.set_viewport(size_px[0], size_px[1]);
         let main = FramePass {
@@ -588,6 +608,7 @@ impl SceneRenderer {
             let options = FullPathOptions {
                 shadows: self.shadows(),
                 reflection: self.reflection(),
+                bloom: self.bloom(),
             };
             full.record(
                 encoder,
@@ -735,13 +756,10 @@ fn normal_matrix(model: Mat4) -> Mat3 {
     }
 }
 
-/// The scene targets' size for a view of `size_px`, each side clamped to the device limit (the
-/// copy into the view stretches it back); `None` when there is nothing to draw.
-fn drawable_size(size_px: [u32; 2], max_dimension: u32) -> Option<[u32; 2]> {
-    if size_px.contains(&0) {
-        return None;
-    }
-    Some(size_px.map(|side| side.min(max_dimension.max(1))))
+/// The scene targets' size for a view of `size_px` with no zero side, each side clamped to
+/// `max_dimension` (the copy into the view stretches it back).
+fn drawable_size(size_px: [u32; 2], max_dimension: u32) -> [u32; 2] {
+    size_px.map(|side| side.min(max_dimension.max(1)))
 }
 
 /// The scene targets' sample count for the caller's `msaa_samples`, and the reason when it differs.
@@ -764,16 +782,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_zero_side_has_nothing_to_draw() {
-        assert_eq!(drawable_size([0, 0], 8192), None);
-        assert_eq!(drawable_size([0, 600], 8192), None);
-        assert_eq!(drawable_size([800, 0], 8192), None);
-    }
-
-    #[test]
     fn sides_are_clamped_to_the_device_limit() {
-        assert_eq!(drawable_size([800, 600], 8192), Some([800, 600]));
-        assert_eq!(drawable_size([10_000, 600], 8192), Some([8192, 600]));
+        assert_eq!(drawable_size([800, 600], 8192), [800, 600]);
+        assert_eq!(drawable_size([10_000, 600], 8192), [8192, 600]);
     }
 
     #[test]

@@ -11,6 +11,7 @@ mod targets;
 pub use capabilities::{Capabilities, choose_path};
 pub use full::FullPathOptions;
 pub use renderer::SceneRenderer;
+pub use targets::FrameSizes;
 
 /// Which render path to use; `BOWLINGBOX_RENDER` picks it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,4 +48,23 @@ pub fn render_mode_warning(value: Option<&str>) -> Option<String> {
         )),
         _ => None,
     }
+}
+
+/// A device on the first adapter for the module tests; `None` (with a note) without one.
+#[cfg(test)]
+fn test_device() -> Option<wgpu::Device> {
+    let instance =
+        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+    let adapter =
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+            .map_err(|err| println!("note: no GPU adapter ({err}); skipping"))
+            .ok()?;
+    let limits = adapter.limits();
+    let (device, _queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        required_limits: limits,
+        ..Default::default()
+    }))
+    .map_err(|err| println!("note: device request failed ({err}); skipping"))
+    .ok()?;
+    Some(device)
 }

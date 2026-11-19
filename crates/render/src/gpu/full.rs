@@ -1,12 +1,12 @@
-//! The full render path: the scene in linear HDR with MSAA, resolved and then tone mapped by a
-//! composite pass into the same 8-bit output the basic path fills, with the key light's shadow
-//! map and the lane reflection. Bloom comes later.
+//! The full render path: the scene in linear HDR with MSAA, resolved, bloomed and then tone mapped
+//! by a composite pass into the same 8-bit output the basic path fills, with the key light's
+//! shadow map and the lane reflection.
 
 use super::capabilities::{HDR_FORMAT, catch_errors};
 use super::pipelines::{
     Pipelines, SCENE_FORMAT, SceneOutput, ScenePipelines, TONEMAP, mirror_pipeline, shadow_pipeline,
 };
-use super::targets::{HdrTargets, Reflection, ShadowMap, TargetLayouts};
+use super::targets::{BLOOM_LEVELS, FrameSizes, HdrTargets, Reflection, ShadowMap, TargetLayouts};
 use std::borrow::Cow;
 use std::num::NonZeroU64;
 
@@ -20,6 +20,8 @@ pub struct FullPathOptions {
     pub shadows: bool,
     /// The half-resolution mirror of the scene that the main lane shows.
     pub reflection: bool,
+    /// The glow around what is brighter than 1, at the theme's strength.
+    pub bloom: bool,
 }
 
 impl Default for FullPathOptions {
@@ -27,6 +29,7 @@ impl Default for FullPathOptions {
         Self {
             shadows: true,
             reflection: true,
+            bloom: true,
         }
     }
 }
@@ -40,8 +43,11 @@ pub struct FullPath {
     shadow_map: ShadowMap,
     /// Draws the mirrored scene into the reflection target.
     mirror: wgpu::RenderPipeline,
-    reflection_layout: wgpu::BindGroupLayout,
-    reflection_sampler: wgpu::Sampler,
+    /// A filtered texture and its sampler: the reflection and the bloom passes' sources.
+    sampled_layout: wgpu::BindGroupLayout,
+    /// Linear and clamped to the edge, for the reflection and the bloom levels.
+    linear_sampler: wgpu::Sampler,
+    bloom: BloomPipelines,
     resolve_layout: wgpu::BindGroupLayout,
     resolve: wgpu::RenderPipeline,
     composite_layout: wgpu::BindGroupLayout,
@@ -58,6 +64,7 @@ fn post_pipeline(
     source: String,
     fragment: &str,
     format: wgpu::TextureFormat,
+    blend: Option<wgpu::BlendState>,
 ) -> wgpu::RenderPipeline {
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some(label),
@@ -86,12 +93,94 @@ fn post_pipeline(
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format,
-                blend: None,
+                blend,
                 write_mask: wgpu::ColorWrites::ALL,
             })],
         }),
         multiview_mask: None,
         cache: None,
+    })
+}
+
+/// The bloom chain's passes (C++ `bright`, `bloomDown`, `bloomUp`), each reading one filtered
+/// texture through `layout`.
+struct BloomPipelines {
+    /// The resolved scene's bright part into the first level.
+    bright: wgpu::RenderPipeline,
+    /// Each level filtered into the next.
+    down: wgpu::RenderPipeline,
+    /// Each level added onto the one above.
+    up: wgpu::RenderPipeline,
+}
+
+impl BloomPipelines {
+    fn new(device: &wgpu::Device, layout: &wgpu::BindGroupLayout) -> Self {
+        let pipeline = |source: &str, fragment, blend| {
+            post_pipeline(
+                device,
+                fragment,
+                layout,
+                source.to_owned(),
+                fragment,
+                HDR_FORMAT,
+                blend,
+            )
+        };
+        let down = include_str!("../shaders/bloom_down.wgsl");
+        let add = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::One,
+            operation: wgpu::BlendOperation::Add,
+        };
+        Self {
+            bright: pipeline(down, "fs_bright", None),
+            down: pipeline(down, "fs_bloom_down", None),
+            up: pipeline(
+                include_str!("../shaders/bloom_up.wgsl"),
+                "fs_bloom_up",
+                Some(wgpu::BlendState {
+                    color: add,
+                    alpha: add,
+                }),
+            ),
+        }
+    }
+}
+
+/// The composite's inputs: the resolved scene, the post uniforms, the first bloom level and its
+/// sampler.
+fn composite_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("composite"),
+        entries: &[
+            texture_entry(0, false),
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: NonZeroU64::new((POST_FLOATS * 4) as u64),
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
     })
 }
 
@@ -117,14 +206,14 @@ impl FullPath {
     pub fn new(device: &wgpu::Device, pipelines: &Pipelines, samples: u32) -> Result<Self, String> {
         catch_errors(device, || {
             let shadow_layout = ShadowMap::layout(device);
-            let reflection_layout = Reflection::layout(device);
+            let sampled_layout = Reflection::layout(device);
             let scene_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("hdr scene"),
                 bind_group_layouts: &[
                     Some(&pipelines.frame_layout),
                     Some(&pipelines.draw_layout),
                     Some(&shadow_layout),
-                    Some(&reflection_layout),
+                    Some(&sampled_layout),
                 ],
                 immediate_size: 0,
             });
@@ -133,7 +222,8 @@ impl FullPath {
             let shadow = shadow_pipeline(device, &pipelines.scene_layout);
             let shadow_map = ShadowMap::new(device, &shadow_layout);
             let mirror = mirror_pipeline(device, &pipelines.scene_layout, HDR_FORMAT);
-            let reflection_sampler = Reflection::sampler(device);
+            let linear_sampler = Reflection::sampler(device);
+            let bloom = BloomPipelines::new(device, &sampled_layout);
             let resolve_layout =
                 device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                     label: Some("hdr resolve"),
@@ -146,24 +236,9 @@ impl FullPath {
                 include_str!("../shaders/resolve.wgsl").to_owned(),
                 "fs_resolve",
                 HDR_FORMAT,
+                None,
             );
-            let composite_layout =
-                device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                    label: Some("composite"),
-                    entries: &[
-                        texture_entry(0, false),
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 1,
-                            visibility: wgpu::ShaderStages::FRAGMENT,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Uniform,
-                                has_dynamic_offset: false,
-                                min_binding_size: NonZeroU64::new((POST_FLOATS * 4) as u64),
-                            },
-                            count: None,
-                        },
-                    ],
-                });
+            let composite_layout = composite_layout(device);
             let composite = post_pipeline(
                 device,
                 "composite",
@@ -171,6 +246,7 @@ impl FullPath {
                 format!("{TONEMAP}\n{}", include_str!("../shaders/composite.wgsl")),
                 "fs_composite",
                 SCENE_FORMAT,
+                None,
             );
             let post_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("post uniforms"),
@@ -184,8 +260,9 @@ impl FullPath {
                 shadow,
                 shadow_map,
                 mirror,
-                reflection_layout,
-                reflection_sampler,
+                sampled_layout,
+                linear_sampler,
+                bloom,
                 resolve_layout,
                 resolve,
                 composite_layout,
@@ -204,7 +281,8 @@ impl FullPath {
         self.targets.as_ref()
     }
 
-    /// Makes the targets `size`, keeping them when they already are.
+    /// Makes the targets `sizes`, keeping them when they already have those sizes and sample
+    /// count (C++ `PostChain::ensureSize`).
     ///
     /// # Errors
     ///
@@ -212,10 +290,14 @@ impl FullPath {
     pub fn ensure_targets(
         &mut self,
         device: &wgpu::Device,
-        size: [u32; 2],
+        sizes: FrameSizes,
         blit_layout: &wgpu::BindGroupLayout,
     ) -> Result<(), String> {
-        if self.targets.as_ref().is_some_and(|t| t.size == size) {
+        if self
+            .targets
+            .as_ref()
+            .is_some_and(|t| t.sizes == sizes && t.samples == self.samples)
+        {
             return Ok(());
         }
         self.targets = None;
@@ -223,30 +305,32 @@ impl FullPath {
             resolve: &self.resolve_layout,
             composite: &self.composite_layout,
             blit: blit_layout,
-            reflection: &self.reflection_layout,
+            sampled: &self.sampled_layout,
         };
         let targets = catch_errors(device, || {
             HdrTargets::new(
                 device,
-                size,
+                sizes,
                 self.samples,
                 &layouts,
                 &self.post_buffer,
-                &self.reflection_sampler,
+                &self.linear_sampler,
             )
         })?;
         self.targets = Some(targets);
         Ok(())
     }
 
-    pub fn write_post(&self, queue: &wgpu::Queue, exposure: f32) {
-        let post: [f32; POST_FLOATS] = [exposure, 0.0, 0.0, 0.0];
+    /// `bloom_strength` 0 leaves the bloom out of the composite.
+    pub fn write_post(&self, queue: &wgpu::Queue, exposure: f32, bloom_strength: f32) {
+        let post: [f32; POST_FLOATS] = [exposure, bloom_strength, 0.0, 0.0];
         queue.write_buffer(&self.post_buffer, 0, bytemuck::cast_slice(&post));
     }
 
     /// The shadow pass (`casters` draws them with the pipeline it is given) and the reflection
     /// pass (`mirrored` likewise) when `options` turn them on, the main pass (`draw` fills it), the
-    /// resolve and the composite into the output target.
+    /// resolve, the bloom chain when `options` turn it on, and the composite into the output
+    /// target.
     pub fn record(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -329,6 +413,9 @@ impl FullPath {
         if let Some(group) = &t.resolve_group {
             post_pass(encoder, "hdr resolve", &t.resolved, &self.resolve, group);
         }
+        if options.bloom {
+            self.record_bloom(encoder, t);
+        }
         post_pass(
             encoder,
             "composite",
@@ -337,8 +424,55 @@ impl FullPath {
             &t.composite_group,
         );
     }
+
+    /// C++ `PostChain::present`'s bloom: the bright part into the first level, down the chain,
+    /// then each level added onto the one above, back to the first.
+    fn record_bloom(&self, encoder: &mut wgpu::CommandEncoder, t: &HdrTargets) {
+        let p = &self.bloom;
+        post_pass(
+            encoder,
+            "bloom bright",
+            &t.bloom[0],
+            &p.bright,
+            &t.bright_group,
+        );
+        for i in 1..BLOOM_LEVELS {
+            let group = &t.bloom_groups[i - 1];
+            post_pass(encoder, "bloom down", &t.bloom[i], &p.down, group);
+        }
+        for i in (1..BLOOM_LEVELS).rev() {
+            let group = &t.bloom_groups[i];
+            let mut pass = target_pass(encoder, "bloom up", &t.bloom[i - 1], wgpu::LoadOp::Load);
+            pass.set_pipeline(&p.up);
+            pass.set_bind_group(0, group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+    }
 }
 
+/// A pass that draws into `target` alone.
+fn target_pass<'e>(
+    encoder: &'e mut wgpu::CommandEncoder,
+    label: &str,
+    target: &wgpu::TextureView,
+    load: wgpu::LoadOp<wgpu::Color>,
+) -> wgpu::RenderPass<'e> {
+    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some(label),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: target,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load,
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        ..Default::default()
+    })
+}
+
+/// One generated triangle over `target`, which `pipeline` fills from `group`.
 fn post_pass(
     encoder: &mut wgpu::CommandEncoder,
     label: &str,
@@ -346,20 +480,44 @@ fn post_pass(
     pipeline: &wgpu::RenderPipeline,
     group: &wgpu::BindGroup,
 ) {
-    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        label: Some(label),
-        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-            view: target,
-            depth_slice: None,
-            resolve_target: None,
-            ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                store: wgpu::StoreOp::Store,
-            },
-        })],
-        ..Default::default()
-    });
+    let mut pass = target_pass(
+        encoder,
+        label,
+        target,
+        wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+    );
     pass.set_pipeline(pipeline);
     pass.set_bind_group(0, group, &[]);
     pass.draw(0..3, 0..1);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn targets_are_rebuilt_only_for_a_new_size() {
+        let Some(device) = crate::gpu::test_device() else {
+            return;
+        };
+        let pipelines = Pipelines::new(&device, 1, wgpu::TextureFormat::Rgba8UnormSrgb, 1);
+        let mut full = FullPath::new(&device, &pipelines, 1).expect("full-path pipelines");
+        let mut ensure = |view| {
+            full.ensure_targets(&device, FrameSizes::new(view), &pipelines.blit_layout)
+                .expect("targets");
+            let t = full.targets().expect("targets");
+            (t.resolved.clone(), t.bloom[3].clone())
+        };
+        let first = ensure([320, 180]);
+        assert_eq!(
+            ensure([320, 180]),
+            first,
+            "the same size rebuilt the targets"
+        );
+        let smaller = ensure([64, 36]);
+        assert_ne!(smaller.0, first.0, "a new size kept the old targets");
+        let tiny = ensure([1, 1]);
+        assert_eq!(tiny.1.texture().size().width, 1);
+        assert_eq!(tiny.1.texture().size().height, 1);
+    }
 }

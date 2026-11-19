@@ -3,16 +3,51 @@
 use super::capabilities::{HDR_FORMAT, SHADOW_MAP_HEIGHT, SHADOW_MAP_WIDTH};
 use super::pipelines::{DEPTH_FORMAT, SCENE_FORMAT, SHADOW_FORMAT};
 
+/// The full path's offscreen target sizes for a view (C++ `FrameSizes`); every side is at least
+/// 1 px.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrameSizes {
+    /// The HDR main pass.
+    pub scene: [u32; 2],
+    /// The lane mirror: half the scene.
+    pub reflection: [u32; 2],
+    /// The bloom chain: half, quarter, eighth and sixteenth of the scene.
+    pub bloom: [[u32; 2]; BLOOM_LEVELS],
+}
+
+/// Levels in the bloom chain.
+pub const BLOOM_LEVELS: usize = 4;
+
+impl FrameSizes {
+    /// The sizes for a view of `view` pixels (C++ `frameSizes`).
+    #[must_use]
+    pub fn new(view: [u32; 2]) -> Self {
+        let half = |size: [u32; 2]| size.map(|side| (side / 2).max(1));
+        let scene = view.map(|side| side.max(1));
+        let mut bloom = [half(scene); BLOOM_LEVELS];
+        for i in 1..BLOOM_LEVELS {
+            bloom[i] = half(bloom[i - 1]);
+        }
+        Self {
+            scene,
+            reflection: half(scene),
+            bloom,
+        }
+    }
+}
+
 /// The bind group layouts the targets are bound through.
 pub struct TargetLayouts<'a> {
     pub resolve: &'a wgpu::BindGroupLayout,
     pub composite: &'a wgpu::BindGroupLayout,
     pub blit: &'a wgpu::BindGroupLayout,
-    pub reflection: &'a wgpu::BindGroupLayout,
+    /// A filtered texture and its sampler: the reflection and the bloom passes' sources.
+    pub sampled: &'a wgpu::BindGroupLayout,
 }
 
 pub struct HdrTargets {
-    pub size: [u32; 2],
+    pub sizes: FrameSizes,
+    pub samples: u32,
     /// The multisampled HDR colour the main pass draws into; `None` with one sample, when the main
     /// pass draws straight into `resolved`.
     pub msaa: Option<wgpu::TextureView>,
@@ -29,27 +64,33 @@ pub struct HdrTargets {
     /// Reads `output`.
     pub blit_group: wgpu::BindGroup,
     pub reflection: Reflection,
+    /// The bloom chain's levels, half to sixteenth of the scene (C++ `_bloom`).
+    pub bloom: [wgpu::TextureView; BLOOM_LEVELS],
+    /// Reads `resolved` filtered, for the bright pass into the first level.
+    pub bright_group: wgpu::BindGroup,
+    /// Reads each bloom level filtered.
+    pub bloom_groups: [wgpu::BindGroup; BLOOM_LEVELS],
 }
 
 impl HdrTargets {
+    /// `linear_sampler` filters the reflection and the bloom levels.
     pub fn new(
         device: &wgpu::Device,
-        size: [u32; 2],
+        sizes: FrameSizes,
         samples: u32,
         layouts: &TargetLayouts<'_>,
         post_uniforms: &wgpu::Buffer,
-        reflection_sampler: &wgpu::Sampler,
+        linear_sampler: &wgpu::Sampler,
     ) -> Self {
-        let extent = wgpu::Extent3d {
-            width: size[0],
-            height: size[1],
-            depth_or_array_layers: 1,
-        };
-        let texture = |label: &str, format, samples, usage| {
+        let texture = |label: &str, size: [u32; 2], format, samples, usage| {
             device
                 .create_texture(&wgpu::TextureDescriptor {
                     label: Some(label),
-                    size: extent,
+                    size: wgpu::Extent3d {
+                        width: size[0],
+                        height: size[1],
+                        depth_or_array_layers: 1,
+                    },
                     mip_level_count: 1,
                     sample_count: samples,
                     dimension: wgpu::TextureDimension::D2,
@@ -61,15 +102,21 @@ impl HdrTargets {
         };
         let sampled_target =
             wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
-        let msaa = (samples > 1).then(|| texture("hdr msaa", HDR_FORMAT, samples, sampled_target));
+        let size = sizes.scene;
+        let msaa =
+            (samples > 1).then(|| texture("hdr msaa", size, HDR_FORMAT, samples, sampled_target));
         let depth = texture(
             "hdr depth",
+            size,
             DEPTH_FORMAT,
             samples,
             wgpu::TextureUsages::RENDER_ATTACHMENT,
         );
-        let resolved = texture("hdr resolved", HDR_FORMAT, 1, sampled_target);
-        let output = texture("full output", SCENE_FORMAT, 1, sampled_target);
+        let resolved = texture("hdr resolved", size, HDR_FORMAT, 1, sampled_target);
+        let output = texture("full output", size, SCENE_FORMAT, 1, sampled_target);
+        let bloom = sizes
+            .bloom
+            .map(|level| texture("bloom", level, HDR_FORMAT, 1, sampled_target));
         let group = |label: &str, layout, entries: &[wgpu::BindGroupEntry<'_>]| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some(label),
@@ -80,6 +127,19 @@ impl HdrTargets {
         let view_entry = |binding, view| wgpu::BindGroupEntry {
             binding,
             resource: wgpu::BindingResource::TextureView(view),
+        };
+        let filtered = |label: &str, view| {
+            group(
+                label,
+                layouts.sampled,
+                &[
+                    view_entry(0, view),
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(linear_sampler),
+                    },
+                ],
+            )
         };
         let resolve_group = msaa
             .as_ref()
@@ -93,17 +153,20 @@ impl HdrTargets {
                     binding: 1,
                     resource: post_uniforms.as_entire_binding(),
                 },
+                view_entry(2, &bloom[0]),
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(linear_sampler),
+                },
             ],
         );
         let blit_group = group("full output", layouts.blit, &[view_entry(0, &output)]);
-        let reflection = Reflection::new(
-            device,
-            reflection_size(size),
-            layouts.reflection,
-            reflection_sampler,
-        );
+        let bright_group = filtered("bloom bright", &resolved);
+        let bloom_groups = std::array::from_fn(|i| filtered("bloom level", &bloom[i]));
+        let reflection = Reflection::new(device, sizes.reflection, layouts.sampled, linear_sampler);
         Self {
-            size,
+            sizes,
+            samples,
             msaa,
             depth,
             resolved,
@@ -112,14 +175,11 @@ impl HdrTargets {
             composite_group,
             blit_group,
             reflection,
+            bloom,
+            bright_group,
+            bloom_groups,
         }
     }
-}
-
-/// The reflection target's size for a scene of `size`: half, at least 1x1 (C++ `frameSizes`).
-#[must_use]
-pub fn reflection_size(size: [u32; 2]) -> [u32; 2] {
-    size.map(|side| (side / 2).max(1))
 }
 
 /// The scene mirrored in the lane plane (C++ `reflection`, `GL_RGBA16F` with a depth buffer, one
@@ -132,10 +192,11 @@ pub struct Reflection {
 }
 
 impl Reflection {
-    /// The layout of [`Reflection::group`].
+    /// The layout of [`Reflection::group`] and of the bloom passes' sources: a filtered texture
+    /// and its sampler.
     pub fn layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("reflection"),
+            label: Some("sampled texture"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
@@ -157,7 +218,8 @@ impl Reflection {
         })
     }
 
-    /// As C++ `GlFramebuffer`'s colour textures: linear, clamped to the edge.
+    /// As C++ `GlFramebuffer`'s colour textures: linear, clamped to the edge. The bloom levels
+    /// share it.
     pub fn sampler(device: &wgpu::Device) -> wgpu::Sampler {
         device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("reflection"),
