@@ -3,9 +3,9 @@
 Bowlingbox keeps its rules in small crates that need no window, GPU or audio device, and a thin app that
 wires them to an egui window (eframe with the wgpu backend).
 
-Crates: `score` (the scoring rules) and `lane` (the throw and the physics seam) exist now. `render`
-(themes, meshes and the wgpu renderer) and `audio` (the sound catalogue and the output seam) come in
-later milestones. `lane` uses `score`; `render` and `audio` will use neither `lane` nor each other.
+Crates: `score` (the scoring rules), `lane` (the throw and the physics seam) and `render` (the
+GPU-free themes, decor, meshes, lighting maths and camera; the wgpu renderer follows) exist now. `audio`
+(the sound catalogue and the output seam) comes in a later milestone. `lane` uses `score`; `render` and `audio` will use neither `lane` nor each other.
 Only the app converts between their types.
 
 ## Layout
@@ -16,6 +16,7 @@ Only the app converts between their types.
 | [`crates/score`](crates/score) | `bowlingbox-score`: the ten-pin scoring rules. |
 | [`apps/bowlingbox`](apps/bowlingbox) | `bowlingbox`: the game. |
 | [`crates/lane`](crates/lane) | `bowlingbox-lane`: the lane types, the physics trait and the throw state machine. |
+| [`crates/render`](crates/render) | `bowlingbox-render`: GPU-free render data and maths: themes, decor layout, meshes, lighting maths, camera and scene description. |
 
 Libraries live in `crates/` and hold the logic. Apps live in `apps/` and only wire a library to an interface: a command line or a window. An app depends on a library, never the other way round, so each library can be tested without an interface.
 
@@ -68,8 +69,9 @@ before the ball nears the rack. The app must drain them every frame: the buffer 
   move and turn the aim towards +x.
 - +x is drawn on the right of the screen, so Right moves the ball right. The debug view does this, and
   the 3D camera must too. A right-handed look-at down +z, as in the C++ game, puts +x on the left. The
-  camera must mirror x, or the app's lane-to-render conversion must negate it, with a test that a ball
-  at +x projects right of the screen centre.
+  `render` camera is left-handed (glam's `lh` look-at and perspective), so +x projects right of the
+  screen centre with no conversion; a test covers it. Meshes keep the C++ winding, which appears
+  clockwise on screen: use `FrontFace::Cw`.
 - Rotations are unit quaternions in the order (x, y, z, w).
 - `Pose.position` is the rigid-body origin. For the ball that is its centre. For a pin it is the point
   on its axis `LANE.pin_origin_height` (0.12 m) above its nominal base. That point is not the centre of

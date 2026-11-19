@@ -1,0 +1,12 @@
+[package]
+name = "bowlingbox-render"
+version.workspace = true
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+glam = "0.34.3"
