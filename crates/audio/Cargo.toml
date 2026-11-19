@@ -11,3 +11,8 @@ workspace = true
 [dependencies]
 hound = "3.5.1"
 kira = { version = "0.12.6", default-features = false, features = ["cpal"] }
+
+# kira's cpal uses ALSA only, which finds no device on PipeWire without pipewire-alsa. This turns
+# on cpal's PulseAudio host; cpal prefers it when a server answers and falls back to ALSA.
+[target.'cfg(target_os = "linux")'.dependencies]
+cpal = { version = "0.18.2", default-features = false, features = ["pulseaudio"] }
