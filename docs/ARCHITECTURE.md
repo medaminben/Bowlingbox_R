@@ -178,6 +178,10 @@ The modules split into pure logic, which is unit-tested, and drawing:
 - `screen`: the `--screen=<name>` hook (`game`, `controls`, `about`, `sound-menu`, `theme-classic`,
   `theme-outdoor`). It sets the start state only: an open dialog, the Sound menu drawn open, a theme.
   The screenshot tool of the manual drives it.
+- `capture`: `--capture=<path>`. `Capture` is the pure state machine (at least 10 frames and the follow
+  camera home, then one screenshot request, then write); `Run` is its egui glue (`ViewportCommand::Screenshot`
+  with a callback), and `write_png` writes a temporary file and renames it. A capture run uses
+  `SilentOutput`, saves nothing and exits 1 with `capture failed: <reason>` on any error.
 
 `app/acceptance.rs` holds the smoke tests of the acceptance list; see
 [ACCEPTANCE.md](ACCEPTANCE.md).

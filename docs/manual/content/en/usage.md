@@ -81,6 +81,10 @@ capture it: `game` (the default), `controls`, `about`, `sound-menu` (the Sound m
 `unknown screen '<name>'; use game, controls, about, sound-menu, theme-classic or theme-outdoor` and the game
 starts normally. A theme screen wins over `--theme`. A run with `--screen` (any name) never saves settings.
 
+`--capture=<path>` writes a PNG of the screen to `<path>` and exits: it opens a 1280 by 800 window, waits until the
+lane has settled, takes one screenshot and plays no sound. Without `--screen` it captures the game. If it cannot write
+the file it prints `capture failed: <reason>` and exits with code 1. On a scaled display the PNG is larger than 1280 by 800.
+
 For how a game is scored, see [Scoring rules](scoring.md). For what the game remembers, see
 [Settings](settings.md). If something does not work, see
 [Troubleshooting](troubleshooting.md).

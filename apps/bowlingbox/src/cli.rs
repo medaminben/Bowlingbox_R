@@ -4,6 +4,7 @@ use bowlingbox_render::{
     RenderMode, ThemeId, render_mode_from_env, render_mode_warning, theme_from_name,
 };
 use clap::Parser;
+use std::path::PathBuf;
 
 use crate::hud_text;
 use crate::screen::{Screen, ScreenState, unknown_screen_message};
@@ -24,6 +25,9 @@ pub struct Cli {
     /// theme-classic or theme-outdoor
     #[arg(long, value_name = "NAME")]
     pub screen: Option<String>,
+    /// Write a screenshot of the screen (the game without `--screen`) to this PNG file and exit
+    #[arg(long, value_name = "PATH")]
+    pub capture: Option<PathBuf>,
 }
 
 /// What the command line and the environment decided.
@@ -34,6 +38,8 @@ pub struct Startup {
     pub mute: bool,
     pub screen: ScreenState,
     pub render_mode: RenderMode,
+    /// `--capture`: where to write the screenshot.
+    pub capture: Option<PathBuf>,
     /// Lines for stderr, each printed once at startup.
     pub warnings: Vec<String>,
 }
@@ -51,7 +57,12 @@ impl Cli {
                 ThemeId::NeonHall
             }),
         };
-        let screen = match self.screen.as_deref() {
+        // A capture run without a screen shows the game, and never saves settings.
+        let screen = match self
+            .screen
+            .as_deref()
+            .or(self.capture.as_ref().map(|_| "game"))
+        {
             None => ScreenState::default(),
             Some(name) => ScreenState {
                 read_only: true,
@@ -70,6 +81,7 @@ impl Cli {
             mute: self.mute,
             screen,
             render_mode: render_mode_from_env(render_env),
+            capture: self.capture.clone(),
             warnings,
         }
     }
@@ -105,6 +117,7 @@ mod tests {
                 mute: false,
                 screen: ScreenState::default(),
                 render_mode: RenderMode::Full,
+                capture: None,
                 warnings: vec![],
             }
         );
@@ -190,6 +203,26 @@ mod tests {
             }
         );
         assert_eq!(startup.theme, ThemeId::NeonHall);
+    }
+
+    #[test]
+    fn capture_takes_a_path_and_defaults_to_the_game_screen() {
+        assert_eq!(parse(&[]).startup(None).capture, None);
+        let startup = parse(&["--capture=/tmp/a.png"]).startup(None);
+        assert_eq!(startup.capture, Some(PathBuf::from("/tmp/a.png")));
+        assert!(startup.screen.read_only);
+        assert_eq!(
+            startup.screen,
+            ScreenState {
+                read_only: true,
+                ..Screen::Game.state()
+            }
+        );
+        assert_eq!(startup.warnings, Vec::<String>::new());
+        let startup = parse(&["--capture", "b.png", "--screen=about"]).startup(None);
+        assert_eq!(startup.capture, Some(PathBuf::from("b.png")));
+        assert_eq!(startup.screen.dialog, Some(crate::dialogs::Dialog::About));
+        assert!(Cli::try_parse_from(["bowlingbox", "--capture"]).is_err());
     }
 
     #[test]

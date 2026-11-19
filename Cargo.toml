@@ -14,6 +14,10 @@ first-release = "2.0.0"
 flow = "beta"
 repo = "medaminben/Bowlingbox_R"
 
+# `cargo bk manual capture` appends --screen=<name> and --capture=<absolute path>.
+[workspace.metadata.buildkit.capture]
+command = ["cargo", "run", "--release", "--locked", "-p", "bowlingbox", "--"]
+
 [workspace.metadata.bk.package]
 display-name = "Bowlingbox"
 main-app = "bowlingbox"
@@ -37,6 +41,8 @@ system-deps.apt = [
 buildkit = { git = "https://github.com/medaminben/buildkit-rust", tag = "v0.3.0" }
 # The version eframe 0.37's egui-wgpu resolves to: one wgpu in the tree.
 wgpu = "30.0.2"
+# PNG for the capture hook; already in the tree through eframe's image dependency.
+png = { version = "0.18.1", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

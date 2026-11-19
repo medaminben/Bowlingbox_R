@@ -576,6 +576,7 @@ dependencies = [
  "clap",
  "eframe",
  "glam 0.34.3",
+ "png",
  "winit",
 ]
 

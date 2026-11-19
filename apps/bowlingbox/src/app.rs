@@ -7,6 +7,7 @@ use bowlingbox_render::{Camera, ThemeId, next_theme, theme};
 use bowlingbox_score::ScoreCalculator;
 use eframe::egui;
 
+use crate::capture;
 use crate::command::{Command, CommandTarget, Route, menu_click_allowed, route};
 use crate::dialogs::{self, Dialog};
 use crate::fixed_step::{self, FixedStep};
@@ -40,6 +41,8 @@ pub struct App {
     /// The last frame asked for no repaint: the window slept until the next input.
     idle: bool,
     save: SavePolicy,
+    /// `--capture`: takes the screenshot and closes the window.
+    capture: Option<capture::Run>,
 }
 
 /// Whether `save` writes the sound settings.
@@ -79,7 +82,15 @@ impl App {
             } else {
                 SavePolicy::Settings
             },
+            capture: None,
         }
+    }
+
+    /// Makes this a capture run: it also saves nothing, whatever the screen was.
+    pub fn with_capture(mut self, run: capture::Run) -> Self {
+        self.capture = Some(run);
+        self.save = SavePolicy::Nothing;
+        self
     }
 
     fn run(&mut self, ctx: &egui::Context, command: Command) {
@@ -239,6 +250,8 @@ impl App {
 /// Ctrl+'+' and Ctrl+'-' change the volume only; egui's own UI zoom is off.
 pub fn configure(ctx: &egui::Context) {
     ctx.options_mut(|o| o.zoom_with_keyboard = false);
+    // eframe loads stored egui memory, with a zoom an earlier build saved, before the creator runs.
+    ctx.set_zoom_factor(1.0);
 }
 
 impl eframe::App for App {
@@ -288,6 +301,10 @@ impl eframe::App for App {
                 .show(ui, |ui| self.hud_view(ui, &snapshot));
         }
         dialogs::show(&ctx, &mut self.dialog, VERSION);
+        let home = self.follow.is_home();
+        if let Some(run) = &mut self.capture {
+            run.frame(&ctx, home);
+        }
     }
 }
 
@@ -319,6 +336,7 @@ mod tests {
     use crate::settings_store::test_storage::Fake;
     use bowlingbox_audio::SilentOutput;
     use eframe::App as _;
+    use std::sync::Arc;
 
     fn app(stored: SoundSettings, mute: bool, screen: ScreenState) -> App {
         App::new(
@@ -411,6 +429,28 @@ mod tests {
         assert!(ctx.options(|o| o.zoom_with_keyboard));
         configure(&ctx);
         assert!(!ctx.options(|o| o.zoom_with_keyboard));
+    }
+
+    #[test]
+    fn configure_resets_a_zoom_loaded_from_storage() {
+        let ctx = egui::Context::default();
+        ctx.options_mut(|o| o.zoom_factor = 1.75);
+        configure(&ctx);
+        // The new zoom takes effect at the end of the next pass.
+        ctx.run_ui(egui::RawInput::default(), |_| {})
+            .textures_delta
+            .clear();
+        assert!((ctx.zoom_factor() - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn a_capture_run_saves_nothing_even_without_a_screen() {
+        let mut storage = Fake::default();
+        let run = capture::Run::new("x.png".into(), Arc::default());
+        app(SoundSettings::default(), false, ScreenState::default())
+            .with_capture(run)
+            .save(&mut storage);
+        assert!(storage.0.is_empty());
     }
 
     #[test]
