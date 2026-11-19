@@ -19,6 +19,8 @@ Bowlingbox 2.0.0 is the Rust port of the 3D ten-pin bowling game. It succeeds
 - The full path measured, at 1920x1080 on an Intel UHD (Comet Lake GT2) on Linux, a median of 71 frames
   per second in Neon Hall, 72 in Classic Alley and 90 in Outdoor. Neon Hall's slowest second was 63.
 - Menu bar (Game, View, Sound, Help) with Controls and About windows.
+- On Windows, Bowlingbox 2.0.0 installs beside Bowling Box 1.5.5 rather than replacing it. Uninstall
+  1.5.5 from Settings, Apps if you no longer want it.
 
 ### For contributors
 
@@ -31,6 +33,6 @@ Bowlingbox 2.0.0 is the Rust port of the 3D ten-pin bowling game. It succeeds
 ### Known limitations
 
 - Checked by hand on Linux only. Still open, among others: the sound checked by ear, and the whole
-  checklist on Windows. The full list of open checks is in [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md).
+  checklist on Windows. The full list of open checks is in [docs/ACCEPTANCE.md](https://github.com/medaminben/Bowlingbox_R/blob/main/docs/ACCEPTANCE.md).
 - The aim guide blends slightly differently from 1.x: its cyan is up to about 16 of 255 levels less
   bright.
