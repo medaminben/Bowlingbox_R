@@ -62,6 +62,7 @@ fn gpu() -> Option<Gpu> {
         required_limits: limits,
         ..Default::default()
     }))
+    .map_err(|err| eprintln!("note: device request failed ({err}); skipping the GPU smoke test"))
     .ok()?;
     Some(Gpu { device, queue })
 }
@@ -313,6 +314,17 @@ fn multisampled_theme_switch_and_aim_guide_render_without_errors() {
         renderer.set_theme(id);
         let _ = render(&gpu, &mut renderer, 4, &camera, &scene);
     }
+}
+
+#[test]
+fn zero_msaa_samples_clamp_to_one_and_render_without_errors() {
+    let Some(gpu) = gpu() else { return };
+    let scope = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let mut renderer = SceneRenderer::new(&gpu.device, &gpu.queue, FORMAT, 0, G, ThemeId::NeonHall);
+    // The scene clamps 0 to 1 sample, so the pass is single-sampled.
+    let _ = render(&gpu, &mut renderer, 1, &lane_camera(), &empty_scene());
+    let error = pollster::block_on(scope.pop());
+    assert!(error.is_none(), "validation error: {error:?}");
 }
 
 #[test]

@@ -92,6 +92,7 @@ impl SceneRenderer {
         geometry: SceneGeometry,
         theme_id: ThemeId,
     ) -> Self {
+        let msaa_samples = msaa_samples.max(1);
         let (scene_samples, note) = scene_samples(msaa_samples);
         if let Some(note) = note {
             eprintln!("{note}");
