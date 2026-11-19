@@ -6,7 +6,7 @@ summary: What Bowlingbox is and where to find help.
 
 ## Bowlingbox
 
-Bowlingbox is a 3D ten-pin bowling game. It is a work in progress until version 2.0.0.
+Bowlingbox is a 3D ten-pin bowling game for Windows and Linux.
 
 Pages:
 

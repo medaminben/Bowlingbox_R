@@ -1,0 +1,54 @@
+name: Manual on Pages
+
+# Builds the user manual with `cargo bk manual` and publishes it to GitHub Pages, so it can be read
+# in a browser at https://medaminben.github.io/Bowlingbox_R/. Runs from main only: the site shows
+# the manual of the latest release.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/manual/**"
+      - ".github/workflows/manual-pages.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The cargo-bk of the buildkit-rust version that Cargo.toml pins.
+      - name: Install cargo-bk
+        run: |
+          set -euo pipefail
+          version="$(python -I -c "import tomllib; print(tomllib.load(open('Cargo.toml','rb'))['workspace']['metadata']['buildkit']['version'])")"
+          cargo install --git https://github.com/medaminben/buildkit-rust --tag "v$version" cargo-bk --locked
+
+      - name: Build the manual
+        run: cargo bk manual
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/manual
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
