@@ -30,9 +30,7 @@ Bowlingbox 2.0.0 is the Rust port of the 3D ten-pin bowling game. It succeeds
 
 ### Known limitations
 
-- Checked by hand on Linux only. Not yet checked: sound by ear, a gutter ball and flying pins in each
-  theme, red pin necks, the View, Theme marks while pressing T, 60 fps at 1920x1080 on Windows, the whole
-  checklist on Windows, Esc and Ctrl+Q in a real window, and settings surviving a restart. See
-  [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md).
+- Checked by hand on Linux only. Still open, among others: the sound checked by ear, and the whole
+  checklist on Windows. The full list of open checks is in [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md).
 - The aim guide blends slightly differently from 1.x: its cyan is up to about 16 of 255 levels less
   bright.
