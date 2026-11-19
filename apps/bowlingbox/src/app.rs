@@ -14,8 +14,10 @@ use crate::follow_camera::FollowCamera;
 use crate::hud::{self, HudGeometry};
 use crate::input::{self, KeyLatch};
 use crate::menus::{self, MenuAction};
+use crate::screen::ScreenState;
 use crate::sound_control::SoundControl;
-use crate::{debug_view, hud_text, lane_commands, scene_adapter, view3d};
+use crate::sound_settings::SoundSettings;
+use crate::{debug_view, hud_text, lane_commands, scene_adapter, settings_store, view3d};
 
 const VERSION: &str = env!("BK_VERSION_FULL");
 
@@ -33,18 +35,23 @@ pub struct App {
     canvas: Option<egui::Rect>,
     /// The open dialog: the lane runs on, but its keys do not reach it.
     dialog: Option<Dialog>,
+    /// The Sound menu is drawn open (`--screen=sound-menu`).
+    sound_menu_pinned: bool,
     /// The last frame asked for no repaint: the window slept until the next input.
     idle: bool,
 }
 
 impl App {
+    /// `stored` are the saved sound settings; `mute` mutes this session only. `screen` is the
+    /// `--screen` state to start in.
     pub fn new(
         theme: ThemeId,
         debug_view: bool,
-        muted: bool,
+        (stored, mute): (SoundSettings, bool),
+        screen: ScreenState,
         mut out: Box<dyn AudioOutput>,
     ) -> Self {
-        let sound = SoundControl::new(out.as_mut(), muted, theme);
+        let sound = SoundControl::new(out.as_mut(), stored, mute, theme);
         Self {
             lane: Lane::default(),
             clock: FixedStep::default(),
@@ -55,7 +62,8 @@ impl App {
             out,
             sound,
             canvas: None,
-            dialog: None,
+            dialog: screen.dialog,
+            sound_menu_pinned: screen.sound_menu_open,
             idle: false,
         }
     }
@@ -88,6 +96,11 @@ impl App {
             Route::CloseDialog => self.dialog = None,
             Route::Ignore => {}
         }
+    }
+
+    /// Writes the sound settings to eframe's storage (see `settings_store`).
+    fn save_settings(&self, storage: &mut dyn eframe::Storage) {
+        settings_store::save(storage, self.sound.persisted());
     }
 
     fn phase(&self) -> Phase {
@@ -160,7 +173,12 @@ impl App {
     }
 
     fn menu_bar(&mut self, ui: &mut egui::Ui) {
-        match menus::show(ui, self.theme, self.sound.settings()) {
+        match menus::show(
+            ui,
+            self.theme,
+            self.sound.settings(),
+            self.sound_menu_pinned,
+        ) {
             Some(MenuAction::Command(command)) => {
                 if menu_click_allowed(command, self.dialog.is_some()) {
                     self.run(ui.ctx(), command);
@@ -201,6 +219,10 @@ impl App {
 }
 
 impl eframe::App for App {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        self.save_settings(storage);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.handle_input(&ctx);
@@ -242,12 +264,86 @@ impl eframe::App for App {
 }
 
 /// The app, repainted every frame even while it waits for input, so `BOWLINGBOX_RENDER_STATS`
-/// has frames to time.
-pub struct RedrawAlways(pub App);
+/// has frames to time. It forwards every `eframe::App` method the app overrides.
+pub struct RedrawAlways<A>(pub A);
 
-impl eframe::App for RedrawAlways {
+impl<A: eframe::App> eframe::App for RedrawAlways<A> {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.0.ui(ui, frame);
         ui.ctx().request_repaint();
+    }
+
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        self.0.save(storage);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::settings_store::test_storage::Fake;
+    use bowlingbox_audio::SilentOutput;
+    use eframe::App as _;
+
+    fn app(stored: SoundSettings, mute: bool, screen: ScreenState) -> App {
+        App::new(
+            ThemeId::NeonHall,
+            false,
+            (stored, mute),
+            screen,
+            Box::new(SilentOutput::default()),
+        )
+    }
+
+    #[test]
+    fn the_screen_state_is_set_at_start_and_nothing_else() {
+        let plain = app(SoundSettings::default(), false, ScreenState::default());
+        assert!(plain.dialog.is_none() && !plain.sound_menu_pinned);
+        let controls = app(
+            SoundSettings::default(),
+            false,
+            crate::screen::Screen::Controls.state(),
+        );
+        assert_eq!(controls.dialog, Some(Dialog::Controls));
+        assert!(!controls.sound_menu_pinned);
+        let menu = app(
+            SoundSettings::default(),
+            false,
+            crate::screen::Screen::SoundMenu.state(),
+        );
+        assert!(menu.sound_menu_pinned && menu.dialog.is_none());
+    }
+
+    #[test]
+    fn save_writes_the_sound_settings() {
+        let stored = SoundSettings {
+            muted: false,
+            volume: 20,
+            ambience: false,
+        };
+        let mut storage = Fake::default();
+        app(stored, false, ScreenState::default()).save(&mut storage);
+        assert_eq!(settings_store::load(Some(&storage)), stored);
+    }
+
+    #[test]
+    fn a_mute_session_saves_the_stored_muted_value() {
+        let mut storage = Fake::default();
+        app(SoundSettings::default(), true, ScreenState::default()).save(&mut storage);
+        assert!(!settings_store::load(Some(&storage)).muted);
+    }
+
+    #[test]
+    fn redraw_always_forwards_save() {
+        struct Recorder(Vec<&'static str>);
+        impl eframe::App for Recorder {
+            fn ui(&mut self, _ui: &mut egui::Ui, _frame: &mut eframe::Frame) {}
+            fn save(&mut self, _storage: &mut dyn eframe::Storage) {
+                self.0.push("save");
+            }
+        }
+        let mut wrapped = RedrawAlways(Recorder(Vec::new()));
+        wrapped.save(&mut Fake::default());
+        assert_eq!(wrapped.0.0, ["save"]);
     }
 }

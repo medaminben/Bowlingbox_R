@@ -15,17 +15,27 @@ use crate::theme_sounds::ambient_for;
 
 pub struct SoundControl {
     settings: SoundSettings,
+    /// The stored `muted` while `--mute` mutes this session: written back instead of the session
+    /// value, until the player changes the muted state themselves.
+    stored_muted: Option<bool>,
     director: SoundDirector,
 }
 
 impl SoundControl {
-    /// Applies the start settings to `out` and starts the theme's ambience without a chime.
-    pub fn new(out: &mut dyn AudioOutput, muted: bool, theme: ThemeId) -> Self {
+    /// Applies the stored settings (muted on top of them for `--mute`) to `out` and starts the
+    /// theme's ambience without a chime.
+    pub fn new(
+        out: &mut dyn AudioOutput,
+        stored: SoundSettings,
+        mute_session: bool,
+        theme: ThemeId,
+    ) -> Self {
         let mut control = Self {
             settings: SoundSettings {
-                muted,
-                ..SoundSettings::default()
+                muted: stored.muted || mute_session,
+                ..stored
             },
+            stored_muted: mute_session.then_some(stored.muted),
             director: SoundDirector::new(),
         };
         control.apply_settings(out);
@@ -37,9 +47,21 @@ impl SoundControl {
         self.settings
     }
 
+    /// What to store: the settings, but with the stored `muted` while only `--mute` muted.
+    pub fn persisted(&self) -> SoundSettings {
+        SoundSettings {
+            muted: self.stored_muted.unwrap_or(self.settings.muted),
+            ..self.settings
+        }
+    }
+
     /// Runs a sound command; any other command changes nothing.
     pub fn apply(&mut self, out: &mut dyn AudioOutput, command: Command) {
+        let before = self.settings.muted;
         self.settings = self.settings.after(command);
+        if self.settings.muted != before {
+            self.stored_muted = None;
+        }
         self.apply_settings(out);
     }
 
@@ -158,16 +180,69 @@ mod tests {
     #[test]
     fn mute_flag_starts_muted() {
         let mut out = SilentOutput::default();
-        let control = SoundControl::new(&mut out, true, ThemeId::NeonHall);
+        let control =
+            SoundControl::new(&mut out, SoundSettings::default(), true, ThemeId::NeonHall);
         assert!(control.settings().muted);
         assert!(out.muted());
         assert_eq!(control.status(), "sound muted");
     }
 
     #[test]
+    fn stored_settings_start_the_session() {
+        let mut out = RecordingOutput::new();
+        let stored = SoundSettings {
+            muted: false,
+            volume: 30,
+            ambience: false,
+        };
+        let control = SoundControl::new(&mut out, stored, false, ThemeId::NeonHall);
+        assert_eq!(control.settings(), stored);
+        assert_eq!(control.persisted(), stored);
+        assert_eq!(out.loop_sound(LoopSlot::Ambient), None);
+        assert!((out.volume() - 0.09).abs() < 1e-6);
+    }
+
+    #[test]
+    fn mute_mutes_the_session_but_the_stored_value_survives() {
+        let mut out = RecordingOutput::new();
+        let stored = SoundSettings {
+            volume: 50,
+            ..SoundSettings::default()
+        };
+        let mut control = SoundControl::new(&mut out, stored, true, ThemeId::NeonHall);
+        assert!(control.settings().muted && out.muted());
+        assert_eq!(control.persisted(), stored);
+        // Changes that leave the muted state alone are stored; muted stays as it was.
+        control.apply(&mut out, Command::ToggleAmbience);
+        assert!(!control.persisted().ambience);
+        assert!(!control.persisted().muted);
+    }
+
+    #[test]
+    fn changing_the_muted_state_in_a_mute_session_is_stored() {
+        let mut out = RecordingOutput::new();
+        let mut control =
+            SoundControl::new(&mut out, SoundSettings::default(), true, ThemeId::NeonHall);
+        control.apply(&mut out, Command::ToggleMute);
+        assert!(!control.persisted().muted);
+        control.apply(&mut out, Command::ToggleMute);
+        assert!(control.persisted().muted);
+        // Volume changes unmute, which counts as the player's change too.
+        let mut control =
+            SoundControl::new(&mut out, SoundSettings::default(), true, ThemeId::NeonHall);
+        control.apply(&mut out, Command::VolumeUp);
+        assert!(!control.persisted().muted);
+    }
+
+    #[test]
     fn start_applies_defaults_and_starts_ambience_without_a_chime() {
         let mut out = RecordingOutput::new();
-        let control = SoundControl::new(&mut out, false, ThemeId::ClassicAlley);
+        let control = SoundControl::new(
+            &mut out,
+            SoundSettings::default(),
+            false,
+            ThemeId::ClassicAlley,
+        );
         assert!(!out.muted());
         assert!((out.volume() - 0.64).abs() < 1e-6);
         assert_eq!(
@@ -181,7 +256,8 @@ mod tests {
     #[test]
     fn sound_commands_update_settings_and_output() {
         let mut out = RecordingOutput::new();
-        let mut control = SoundControl::new(&mut out, false, ThemeId::NeonHall);
+        let mut control =
+            SoundControl::new(&mut out, SoundSettings::default(), false, ThemeId::NeonHall);
         control.apply(&mut out, Command::ToggleMute);
         assert!(control.settings().muted && out.muted());
         // Changing the volume unmutes.
@@ -203,7 +279,8 @@ mod tests {
     #[test]
     fn muting_and_unmuting_keeps_the_ambience_and_roll_loops_running() {
         let mut out = SilentOutput::default();
-        let mut control = SoundControl::new(&mut out, false, ThemeId::NeonHall);
+        let mut control =
+            SoundControl::new(&mut out, SoundSettings::default(), false, ThemeId::NeonHall);
         let mut lane = rolling_lane();
         control.step_frame(&mut out, &mut lane, 2);
         control.step_frame(&mut out, &mut lane, 2);
@@ -224,7 +301,8 @@ mod tests {
     #[test]
     fn a_theme_change_announces_with_the_new_ambience() {
         let mut out = RecordingOutput::new();
-        let mut control = SoundControl::new(&mut out, false, ThemeId::NeonHall);
+        let mut control =
+            SoundControl::new(&mut out, SoundSettings::default(), false, ThemeId::NeonHall);
         control.theme_changed(&mut out, ThemeId::Outdoor);
         assert_eq!(out.count(SoundId::ThemeSwitch), 1);
         assert_eq!(
@@ -236,7 +314,8 @@ mod tests {
     #[test]
     fn a_new_game_plays_the_chime() {
         let mut out = RecordingOutput::new();
-        let mut control = SoundControl::new(&mut out, false, ThemeId::NeonHall);
+        let mut control =
+            SoundControl::new(&mut out, SoundSettings::default(), false, ThemeId::NeonHall);
         control.new_game(&mut out);
         assert_eq!(out.count(SoundId::NewGame), 1);
     }
@@ -244,7 +323,8 @@ mod tests {
     #[test]
     fn impacts_are_drained_every_frame_even_while_muted() {
         let mut out = RecordingOutput::new();
-        let mut control = SoundControl::new(&mut out, true, ThemeId::NeonHall);
+        let mut control =
+            SoundControl::new(&mut out, SoundSettings::default(), true, ThemeId::NeonHall);
         let mut lane = rolling_lane();
         for _ in 0..3 {
             control.step_frame(&mut out, &mut lane, 4);
@@ -258,7 +338,8 @@ mod tests {
     #[test]
     fn the_director_gets_the_summed_step_time() {
         let mut out = RecordingOutput::new();
-        let mut control = SoundControl::new(&mut out, false, ThemeId::NeonHall);
+        let mut control =
+            SoundControl::new(&mut out, SoundSettings::default(), false, ThemeId::NeonHall);
         let mut lane = rolling_lane();
         // The first update only records the snapshot.
         control.step_frame(&mut out, &mut lane, 2);

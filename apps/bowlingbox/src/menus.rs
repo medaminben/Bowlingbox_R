@@ -51,10 +51,37 @@ pub enum MenuAction {
     About,
 }
 
-/// Draws the menu bar and returns what was chosen, if anything.
-pub fn show(ui: &mut egui::Ui, current: ThemeId, settings: SoundSettings) -> Option<MenuAction> {
+/// The items of the Sound menu; the menu and the pinned copy of `--screen=sound-menu` both use it.
+fn sound_items(ui: &mut egui::Ui, sound: SoundMenu, chosen: &mut Option<MenuAction>) {
+    if ui.checkbox(&mut { sound.muted }, MUTE).clicked() {
+        *chosen = Some(MenuAction::Command(Command::ToggleMute));
+    }
+    let up = ui.add_enabled(sound.volume.up_enabled, egui::Button::new(VOLUME_UP));
+    if up.clicked() {
+        *chosen = Some(MenuAction::Command(Command::VolumeUp));
+    }
+    let down = ui.add_enabled(sound.volume.down_enabled, egui::Button::new(VOLUME_DOWN));
+    if down.clicked() {
+        *chosen = Some(MenuAction::Command(Command::VolumeDown));
+    }
+    ui.separator();
+    if ui.checkbox(&mut { sound.ambience }, AMBIENCE).clicked() {
+        *chosen = Some(MenuAction::Command(Command::ToggleAmbience));
+    }
+}
+
+/// Draws the menu bar and returns what was chosen, if anything. With `pin_sound`, the Sound menu's
+/// items also show in a popup under its button, as if it were open (`--screen=sound-menu`;
+/// egui cannot open a menu from code).
+pub fn show(
+    ui: &mut egui::Ui,
+    current: ThemeId,
+    settings: SoundSettings,
+    pin_sound: bool,
+) -> Option<MenuAction> {
     let sound = sound_menu(settings);
     let mut chosen = None;
+    let mut sound_button = None;
     egui::MenuBar::new().ui(ui, |ui| {
         ui.menu_button("Game", |ui| {
             if ui
@@ -83,23 +110,8 @@ pub fn show(ui: &mut egui::Ui, current: ThemeId, settings: SoundSettings) -> Opt
                 }
             });
         });
-        ui.menu_button("Sound", |ui| {
-            if ui.checkbox(&mut { sound.muted }, MUTE).clicked() {
-                chosen = Some(MenuAction::Command(Command::ToggleMute));
-            }
-            let up = ui.add_enabled(sound.volume.up_enabled, egui::Button::new(VOLUME_UP));
-            if up.clicked() {
-                chosen = Some(MenuAction::Command(Command::VolumeUp));
-            }
-            let down = ui.add_enabled(sound.volume.down_enabled, egui::Button::new(VOLUME_DOWN));
-            if down.clicked() {
-                chosen = Some(MenuAction::Command(Command::VolumeDown));
-            }
-            ui.separator();
-            if ui.checkbox(&mut { sound.ambience }, AMBIENCE).clicked() {
-                chosen = Some(MenuAction::Command(Command::ToggleAmbience));
-            }
-        });
+        let sound_menu = ui.menu_button("Sound", |ui| sound_items(ui, sound, &mut chosen));
+        sound_button = Some(sound_menu.response.rect);
         ui.menu_button("Help", |ui| {
             if ui.button("Controls").clicked() {
                 chosen = Some(MenuAction::Controls);
@@ -111,6 +123,14 @@ pub fn show(ui: &mut egui::Ui, current: ThemeId, settings: SoundSettings) -> Opt
             }
         });
     });
+    if let Some(rect) = sound_button.filter(|_| pin_sound) {
+        egui::Area::new(egui::Id::unique("pinned_sound_menu"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(rect.left_bottom())
+            .show(ui.ctx(), |ui| {
+                egui::Frame::menu(ui.style()).show(ui, |ui| sound_items(ui, sound, &mut chosen));
+            });
+    }
     chosen
 }
 

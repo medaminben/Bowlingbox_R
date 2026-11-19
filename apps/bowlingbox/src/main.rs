@@ -14,6 +14,8 @@ mod lane_commands;
 mod menus;
 mod scene_adapter;
 mod scoreboard;
+mod screen;
+mod settings_store;
 mod sound_control;
 mod sound_director;
 mod sound_settings;
@@ -48,6 +50,8 @@ fn main() -> eframe::Result {
             .with_inner_size([960.0, 640.0])
             .with_min_inner_size([800.0, 600.0]),
         renderer: eframe::Renderer::Wgpu,
+        // The window starts at its default size; only the sound settings are remembered.
+        persist_window: false,
         ..Default::default()
     };
     if let WgpuSetup::CreateNew(create_new) = &mut options.wgpu_options.wgpu_setup {
@@ -64,7 +68,14 @@ fn main() -> eframe::Result {
                 .ok_or("the window has no wgpu render state")?;
             fonts::install(&cc.egui_ctx);
             view3d::install(render_state, startup.theme, startup.render_mode, stats);
-            let app = app::App::new(startup.theme, startup.debug_view, startup.mute, out);
+            let stored = settings_store::load(cc.storage);
+            let app = app::App::new(
+                startup.theme,
+                startup.debug_view,
+                (stored, startup.mute),
+                startup.screen,
+                out,
+            );
             Ok(if stats {
                 Box::new(app::RedrawAlways(app))
             } else {

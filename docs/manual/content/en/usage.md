@@ -56,7 +56,22 @@ and hold the left button to charge and release it to throw.
 The game plays the rolling ball, the pins, a tone while you charge, a sound for strikes and spares, and a
 background loop for each theme. M mutes. + and - change the volume in steps of 10 %, and changing the volume
 also unmutes. B switches the background loop on or off; the other sounds stay on. The same choices are in the
-**Sound** menu. The settings last for this session. To start without sound, run `bowlingbox --mute`.
+**Sound** menu. The game remembers
+mute, volume and the background loop for the next start; the theme is not remembered. To start without sound,
+run `bowlingbox --mute`. That mutes only this session and does not change the saved mute setting, unless you
+switch mute or the volume yourself during the session.
+
+The settings are saved about every 30 seconds and when you close the window, in the file `app.ron` in
+this folder:
+
+| System | Folder |
+| --- | --- |
+| Linux | `~/.local/share/bowlingbox` (or `$XDG_DATA_HOME/bowlingbox` when that is set) |
+| Windows | `%APPDATA%\Bowlingbox\data` |
+| macOS | `~/Library/Application Support/Bowlingbox` |
+
+Delete the file to go back to the defaults (volume 80 %, not muted, background loop on). A value in the file
+that the game cannot read is replaced by its default, and a volume outside 0 to 100 % is cut to that range.
 
 If no sound device can be opened, the game runs without sound and prints one line that starts with
 `sound disabled:` in the terminal.
@@ -74,6 +89,14 @@ If no sound device can be opened, the game runs without sound and prints one lin
 
 While the Controls or About window is open, the lane keeps running but the game keys (move, aim, throw,
 new game, theme and sound) do nothing until you close it.
+
+## For contributors
+
+`bowlingbox --screen=<name>` opens the window in a named state without any input, so a screenshot tool can
+capture it: `game` (the default), `controls`, `about`, `sound-menu` (the Sound menu shown open),
+`theme-classic` and `theme-outdoor`. It changes nothing else. An unknown name prints
+`unknown screen '<name>'; use game, controls, about, sound-menu, theme-classic or theme-outdoor` and the game
+starts normally. A theme screen wins over `--theme`.
 
 For how a game is scored, see [Scoring rules](scoring.md). If something does not work, see
 [Troubleshooting](troubleshooting.md).

@@ -15,7 +15,8 @@ cargo run -p bowlingbox
 
 `cargo run -p bowlingbox -- --version` prints the version and exits. `--theme=neon|classic|outdoor` picks
 the look at start (any letter case; an unknown name prints a warning and gives Neon Hall). `--debug-view`
-draws the top-down physics view instead of the 3D view. `--mute` starts without sound (this session only).
+draws the top-down physics view instead of the 3D view. `--mute` starts without sound (this session only). Sound settings are remembered between runs.
+`--screen=<name>` opens a named screen for screenshots (see the manual).
 The 3D view uses the full render path (shadows, lane reflection,
 bloom) where the GPU supports it and the basic path otherwise; stderr then gets one `render: ...` line with the
 reason. `BOWLINGBOX_RENDER=basic` forces the basic path, `full` or no value picks the full path where supported,
