@@ -6,6 +6,8 @@ use bowlingbox_audio::{AudioOutput, LoopSlot, SoundId, Voice};
 use bowlingbox_lane::{Body, Impact, LANE, Phase, Snapshot};
 use bowlingbox_score::ScoreSheet;
 
+use crate::hud_text::{ThrowResult, throw_result};
+
 /// m/s: loudest, highest roll.
 const ROLL_FULL_SPEED: f32 = 12.0;
 /// m/s.
@@ -44,21 +46,12 @@ fn voice(volume: f32, pitch: f32, pan: f32) -> Voice {
     Voice { volume, pitch, pan }
 }
 
-/// Strike and spare get a stinger; a gutter ball or a plain count does not. The sheet's mark
-/// decides: ten pins on a second ball are a spare.
+/// Strike and spare get a stinger; a gutter ball or a plain count does not.
 fn stinger_for(s: &Snapshot, sheet: &dyn ScoreSheet) -> Option<SoundId> {
-    use bowlingbox_score::{PINS, Slot};
-    let pins = s.last_pins_down?;
-    let last = sheet
-        .rolls()
-        .into_iter()
-        .rev()
-        .find(|slot| !slot.is_blank());
-    match last {
-        Some(Slot::Spare) => Some(SoundId::Spare),
-        Some(Slot::Strike) => Some(SoundId::Strike),
-        _ if pins == PINS => Some(SoundId::Strike),
-        _ => None,
+    match throw_result(s, sheet) {
+        ThrowResult::Strike => Some(SoundId::Strike),
+        ThrowResult::Spare => Some(SoundId::Spare),
+        ThrowResult::Gutter | ThrowResult::Pins | ThrowResult::None => None,
     }
 }
 

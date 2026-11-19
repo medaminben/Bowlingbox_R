@@ -8,6 +8,7 @@ use bowlingbox_score::Game;
 
 use crate::command::Command;
 use crate::fixed_step::DT;
+use crate::hud_text;
 use crate::sound_director::SoundDirector;
 use crate::sound_settings::SoundSettings;
 use crate::theme_sounds::ambient_for;
@@ -71,13 +72,9 @@ impl SoundControl {
         snapshot
     }
 
-    /// `volume NN %` or `sound muted`.
+    /// `volume NN %` or `sound muted`, plus `, no ambience`.
     pub fn status(&self) -> String {
-        if self.settings.muted {
-            "sound muted".to_owned()
-        } else {
-            format!("volume {} %", self.settings.volume)
-        }
+        hud_text::sound_status(self.settings)
     }
 
     fn apply_settings(&mut self, out: &mut dyn AudioOutput) {

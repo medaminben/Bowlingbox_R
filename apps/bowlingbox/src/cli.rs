@@ -5,6 +5,8 @@ use bowlingbox_render::{
 };
 use clap::Parser;
 
+use crate::hud_text;
+
 #[derive(Parser, Debug, Default)]
 #[command(name = "bowlingbox", version = env!("BK_VERSION_FULL"), about = "A 3D bowling game")]
 pub struct Cli {
@@ -39,9 +41,7 @@ impl Cli {
         let theme_id = match self.theme.as_deref() {
             None => ThemeId::NeonHall,
             Some(name) => theme_from_name(name).unwrap_or_else(|| {
-                warnings.push(format!(
-                    "unknown theme '{name}'; use neon, classic or outdoor"
-                ));
+                warnings.push(hud_text::unknown_theme_message(name));
                 ThemeId::NeonHall
             }),
         };
