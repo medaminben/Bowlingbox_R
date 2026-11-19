@@ -6,11 +6,13 @@ mod full;
 mod meshes;
 mod pipelines;
 mod renderer;
+mod stats;
 mod targets;
 
 pub use capabilities::{Capabilities, choose_path};
 pub use full::FullPathOptions;
 pub use renderer::SceneRenderer;
+pub use stats::{PassStats, TimedPass, render_stats_from_env, stats_due, stats_unsupported_line};
 pub use targets::FrameSizes;
 
 /// Which render path to use; `BOWLINGBOX_RENDER` picks it.

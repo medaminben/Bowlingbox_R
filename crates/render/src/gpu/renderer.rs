@@ -8,6 +8,7 @@ use super::meshes::{MeshKind, Meshes};
 use super::pipelines::{
     DEPTH_FORMAT, DRAW_FLOATS, DRAW_STRIDE, FRAME_FLOATS, Pipelines, SCENE_FORMAT, ScenePipelines,
 };
+use super::stats::{GpuTimer, TimedPass, stats_unsupported_line};
 use super::targets::FrameSizes;
 use crate::camera::Camera;
 use crate::decor::{Prop, Shape, build_props};
@@ -120,6 +121,8 @@ pub struct SceneRenderer {
     fallback: Option<String>,
     /// The last `prepare` drew a frame; `paint` copies it.
     ready: bool,
+    /// Per-pass GPU times, after `enable_gpu_stats`.
+    timer: Option<GpuTimer>,
 }
 
 impl SceneRenderer {
@@ -188,7 +191,29 @@ impl SceneRenderer {
             full_options: FullPathOptions::default(),
             fallback,
             ready: false,
+            timer: None,
         }
+    }
+
+    /// Times each pass on the GPU from now on (`BOWLINGBOX_RENDER_STATS=1`); `take_stats_line`
+    /// gives the averages about once a second.
+    ///
+    /// # Errors
+    ///
+    /// `stats_unsupported_line` when `device` has no `TIMESTAMP_QUERY`; the frames then go
+    /// untimed.
+    pub fn enable_gpu_stats(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> Result<(), &'static str> {
+        self.timer = Some(GpuTimer::new(device, queue).ok_or(stats_unsupported_line())?);
+        Ok(())
+    }
+
+    /// The stats line that came due at a `prepare` since the last call, for stderr.
+    pub fn take_stats_line(&mut self) -> Option<String> {
+        self.timer.as_mut().and_then(GpuTimer::take_line)
     }
 
     /// The path that draws now. `Full` can turn into `Basic` at a `prepare` (see `fallback_reason`).
@@ -324,7 +349,14 @@ impl SceneRenderer {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("scene"),
         });
+        if let Some(timer) = &mut self.timer {
+            timer.begin_frame(device);
+        }
         self.record(&mut encoder);
+        let timed = [self.shadows(), self.reflection(), true, self.full.is_some()];
+        if let Some(timer) = &mut self.timer {
+            timer.end_frame(&mut encoder, timed);
+        }
         self.ready = true;
         Some(encoder.finish())
     }
@@ -604,6 +636,7 @@ impl SceneRenderer {
     }
 
     fn record(&self, encoder: &mut wgpu::CommandEncoder) {
+        let timer = self.timer.as_ref().and_then(GpuTimer::writes);
         if let Some(full) = &self.full {
             let options = FullPathOptions {
                 shadows: self.shadows(),
@@ -616,6 +649,7 @@ impl SceneRenderer {
                 |pass, pipeline| self.draw_casters(pass, pipeline),
                 |pass, pipeline| self.draw_mirrored(pass, pipeline),
                 |pass| self.draw_scene(pass, full.scene()),
+                timer,
             );
             return;
         }
@@ -645,6 +679,7 @@ impl SceneRenderer {
                 }),
                 stencil_ops: None,
             }),
+            timestamp_writes: timer.map(|w| w.whole(TimedPass::Main)),
             ..Default::default()
         });
         self.draw_scene(&mut pass, &self.pipelines.scene);

@@ -44,21 +44,37 @@ pub fn device_limits(backend: wgpu::Backend, adapter: &wgpu::Limits) -> wgpu::Li
     }
 }
 
-/// eframe's device request with `device_limits`.
-pub fn device_descriptor(adapter: &wgpu::Adapter) -> wgpu::DeviceDescriptor<'static> {
+/// The device's features: `TIMESTAMP_QUERY` when the stats are on and the adapter has it.
+pub fn device_features(adapter: wgpu::Features, stats: bool) -> wgpu::Features {
+    if stats {
+        adapter & wgpu::Features::TIMESTAMP_QUERY
+    } else {
+        wgpu::Features::empty()
+    }
+}
+
+/// eframe's device request with `device_limits` and `device_features`.
+pub fn device_descriptor(adapter: &wgpu::Adapter, stats: bool) -> wgpu::DeviceDescriptor<'static> {
     wgpu::DeviceDescriptor {
         label: Some("bowlingbox device"),
+        required_features: device_features(adapter.features(), stats),
         required_limits: device_limits(adapter.get_info().backend, &adapter.limits()),
         ..Default::default()
     }
 }
 
 /// Creates the renderer once. eframe draws without multisampling (`multisampling` 0 and no depth
-/// buffer, which the renderer's blit needs), so the pass has one sample.
-pub fn install(render_state: &egui_wgpu::RenderState, theme: ThemeId, mode: RenderMode) {
+/// buffer, which the renderer's blit needs), so the pass has one sample. With `stats` the passes
+/// are timed, or one line says the device cannot time them.
+pub fn install(
+    render_state: &egui_wgpu::RenderState,
+    theme: ThemeId,
+    mode: RenderMode,
+    stats: bool,
+) {
     let geometry: SceneGeometry = scene_geometry();
     let caps = Capabilities::probe(&render_state.adapter, &render_state.device);
-    let renderer = SceneRenderer::new(
+    let mut renderer = SceneRenderer::new(
         &render_state.device,
         &render_state.queue,
         render_state.target_format,
@@ -68,6 +84,10 @@ pub fn install(render_state: &egui_wgpu::RenderState, theme: ThemeId, mode: Rend
         mode,
         &caps,
     );
+    if stats && let Err(line) = renderer.enable_gpu_stats(&render_state.device, &render_state.queue)
+    {
+        eprintln!("{line}");
+    }
     let mut resource = Resource {
         renderer,
         theme,
@@ -126,6 +146,9 @@ impl CallbackTrait for Frame {
             .renderer
             .prepare(device, queue, &self.camera, &self.scene, size);
         resource.report_fallback();
+        if let Some(line) = resource.renderer.take_stats_line() {
+            eprintln!("{line}");
+        }
         commands.into_iter().collect()
     }
 
@@ -193,6 +216,18 @@ mod tests {
         let limits = device_limits(wgpu::Backend::Vulkan, &small);
         assert_eq!(limits.max_texture_dimension_2d, 2048);
         assert_eq!(limits.max_bind_groups, 2);
+    }
+
+    #[test]
+    fn timestamps_are_requested_only_with_stats_on_an_adapter_that_has_them() {
+        let timestamps = wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::DEPTH_CLIP_CONTROL;
+        assert_eq!(
+            device_features(timestamps, true),
+            wgpu::Features::TIMESTAMP_QUERY
+        );
+        assert_eq!(device_features(timestamps, false), wgpu::Features::empty());
+        let none = wgpu::Features::DEPTH_CLIP_CONTROL;
+        assert_eq!(device_features(none, true), wgpu::Features::empty());
     }
 
     #[test]

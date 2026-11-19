@@ -9,6 +9,7 @@ mod lane_commands;
 mod scene_adapter;
 mod view3d;
 
+use bowlingbox_render::render_stats_from_env;
 use clap::Parser;
 use eframe::egui;
 use eframe::egui_wgpu::WgpuSetup;
@@ -17,6 +18,7 @@ use std::sync::Arc;
 fn main() -> eframe::Result {
     let cli = cli::Cli::parse();
     let startup = cli.startup(std::env::var("BOWLINGBOX_RENDER").ok().as_deref());
+    let stats = render_stats_from_env(std::env::var("BOWLINGBOX_RENDER_STATS").ok().as_deref());
     for warning in &startup.warnings {
         eprintln!("{warning}");
     }
@@ -31,7 +33,8 @@ fn main() -> eframe::Result {
         ..Default::default()
     };
     if let WgpuSetup::CreateNew(create_new) = &mut options.wgpu_options.wgpu_setup {
-        create_new.device_descriptor = Arc::new(view3d::device_descriptor);
+        create_new.device_descriptor =
+            Arc::new(move |adapter| view3d::device_descriptor(adapter, stats));
     }
     eframe::run_native(
         title,
@@ -41,8 +44,13 @@ fn main() -> eframe::Result {
                 .wgpu_render_state
                 .as_ref()
                 .ok_or("the window has no wgpu render state")?;
-            view3d::install(render_state, startup.theme, startup.render_mode);
-            Ok(Box::new(app::App::new(startup.theme, startup.debug_view)))
+            view3d::install(render_state, startup.theme, startup.render_mode, stats);
+            let app = app::App::new(startup.theme, startup.debug_view);
+            Ok(if stats {
+                Box::new(app::RedrawAlways(app))
+            } else {
+                Box::new(app)
+            })
         }),
     )
 }

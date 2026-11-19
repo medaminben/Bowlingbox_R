@@ -79,20 +79,52 @@ before the ball nears the rack. The app must drain them every frame: the buffer 
 
 ## The scene renderer
 
-`SceneRenderer` draws the basic path of the C++ renderer: the lit shader (GGX key light, hemisphere
-ambient, up to four point lights, fog, emissive materials, wood and ball patterns, tone mapping), the
-sky gradient behind the opaque geometry and the translucent aim guide. Shadows, reflections, an HDR
-target and bloom come in milestone 5. The shaders are WGSL in `crates/render/src/shaders`.
+`SceneRenderer` ports the C++ renderer and has two paths. Both draw the same scene: the lit shader
+(GGX key light, hemisphere ambient, up to four point lights, fog, emissive materials, wood and ball
+patterns), the sky gradient behind the opaque geometry and the translucent aim guide. The shaders are
+WGSL in `crates/render/src/shaders`.
 
-It fits an egui-wgpu paint callback. `prepare` draws the scene into the renderer's own colour and
-depth targets, sized to the view, and returns the command buffer to submit before egui's pass;
-`paint` copies the result into egui's pass. That pass must have no depth attachment (eframe's
-default), because the copy pipeline has none. A zero-size view draws nothing.
+The full path runs these passes each frame:
 
-The renderer stays within wgpu's WebGL2 downlevel limits, so it also runs on the GL backend. The GPU
-smoke test requests a device with those limits; without an adapter it prints a note and passes.
-`render_mode_from_env` reads `BOWLINGBOX_RENDER`: `basic`, in any case, is the only path so far, and
-`render_mode_warning` gives the one line to print for any other value.
+1. Shadow: a 1024x4096 depth map from the key light, fitted to the shadow box.
+2. Reflection: the scene mirrored in the lane plane at half resolution, sampled by the main lane only.
+3. Main: the scene into an `Rgba16Float` target with up to 4x MSAA.
+4. Post: the MSAA resolve, a 4-level bloom (bright part, down, up), then ACES tone mapping with the
+   theme's exposure into an 8-bit target.
+
+The basic path draws only the main pass and tone maps in the lit shader.
+
+It fits an egui-wgpu paint callback. `prepare` draws the scene into the renderer's own targets, sized
+to the view, and returns the command buffer to submit before egui's pass; `paint` copies the result
+into egui's pass. That pass must have no depth attachment (eframe's default), because the copy
+pipeline has none. A zero-size view draws nothing.
+
+`Capabilities::probe` reads what the device offers, and `choose_path` picks the path.
+`render_mode_from_env` reads `BOWLINGBOX_RENDER`: `basic` (any case) forces the basic path; `full`
+or no value asks for the full path; `render_mode_warning` gives the one line to print for any other
+value. The basic path runs instead of the full one when:
+
+- `BOWLINGBOX_RENDER=basic` is set;
+- `Rgba16Float` cannot be rendered to and sampled, or the device's texture size is below 4096;
+- a full-path pipeline fails to build (caught in a validation error scope);
+- the targets fail to build at a new view size. The full path then stays off for the rest of the run.
+
+`fallback_reason` gives the reason, and the app prints it once to stderr with a `render: ` prefix,
+for example `render: basic path (BOWLINGBOX_RENDER=basic)`. The basic path stays within wgpu's WebGL2
+downlevel limits, so it also runs on the GL backend. The GPU tests print a note and pass without an
+adapter.
+
+`FullPathOptions` turns the shadow, reflection and bloom passes off one by one. It is a debug and
+test switch; the app leaves all three on.
+
+`BOWLINGBOX_RENDER_STATS=1` times the passes (`shadow`, `reflection`, `main`, `post`) with
+timestamp queries. The app requests `TIMESTAMP_QUERY` only when the stats are on and the adapter has
+it, and then redraws every frame. The queries rotate through three sets; a set is read only once its
+buffer is mapped, so a frame never waits on the GPU, and a frame that finds no free set goes untimed.
+About once a second the averages go to stderr as in C++, for example
+`render: shadow 1.99 ms, reflection 0.37 ms, main 10.08 ms, post 4.01 ms (GPU, 31 frames)`. A pass
+that did not run shows 0.00. Without timestamp queries the app prints
+`render stats: timestamp queries not supported by this adapter` once and runs without stats.
 
 The app wires it in four small modules. `scene_adapter` is the one place that turns a lane `Snapshot`
 into a `SceneDescription` (pins sit `PIN_MESH_OFFSET_Y` along their own up axis, aim guide only while

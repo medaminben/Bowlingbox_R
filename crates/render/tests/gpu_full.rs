@@ -11,7 +11,7 @@
 use bowlingbox_render::{
     Camera, Capabilities, FullPathOptions, RenderMode, SceneDescription, SceneGeometry,
     SceneRenderer, THEMES, ThemeId, Transform, choose_path, linear_to_srgb, srgb_to_linear_vec3,
-    theme,
+    stats_unsupported_line, theme,
 };
 use glam::{Vec3, Vec4Swizzles};
 
@@ -729,4 +729,118 @@ fn targets_that_fail_at_a_new_size_switch_to_the_basic_path_for_good() {
         assert_eq!(renderer.path(), RenderMode::Basic);
         assert_eq!(renderer.fallback_reason(), Some(reason.as_str()));
     }
+}
+
+/// The four averages of a stats line, in pass order: shadow, reflection, main, post.
+fn stats_ms(line: &str) -> [f64; 4] {
+    let mut values = line
+        .split(" ms")
+        .filter_map(|part| part.rsplit(' ').next()?.parse::<f64>().ok());
+    [(); 4].map(|()| {
+        values
+            .next()
+            .unwrap_or_else(|| panic!("four values in {line:?}"))
+    })
+}
+
+/// Frames until the renderer has a stats line, or 3 seconds pass.
+fn stats_line(gpu: &Gpu, renderer: &mut SceneRenderer) -> String {
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_secs(3) {
+        let _ = render(gpu, renderer, 1, &lane_camera(), &racked_pins());
+        if let Some(line) = renderer.take_stats_line() {
+            return line;
+        }
+    }
+    panic!("no stats line within 3 s");
+}
+
+#[test]
+fn stats_time_every_full_path_pass_about_once_a_second() {
+    let Some(gpu) = full_gpu_with(wgpu::Features::TIMESTAMP_QUERY) else {
+        return;
+    };
+    if !gpu.caps.timestamp_query {
+        println!("note: the adapter has no timestamp queries; skipping");
+        return;
+    }
+    let scope = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let mut renderer = full_renderer(&gpu, 1, ThemeId::NeonHall);
+    renderer
+        .enable_gpu_stats(&gpu.device, &gpu.queue)
+        .expect("stats on a device with timestamps");
+    let start = std::time::Instant::now();
+    let line = stats_line(&gpu, &mut renderer);
+    assert!(
+        start.elapsed() >= std::time::Duration::from_secs(1),
+        "{line}"
+    );
+    println!("{line}");
+    assert!(line.starts_with("render: shadow "), "{line}");
+    assert!(line.ends_with(" frames)"), "{line}");
+    let ms = stats_ms(&line);
+    assert!(ms.iter().all(|&v| v > 0.0 && v < 1000.0), "{line}");
+    // The next line covers only what came after this one.
+    assert_eq!(renderer.take_stats_line(), None);
+    let error = pollster::block_on(scope.pop());
+    assert!(error.is_none(), "validation error: {error:?}");
+}
+
+#[test]
+fn stats_on_the_basic_path_time_only_the_main_pass() {
+    let Some(adapter) = adapter() else { return };
+    if !adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+        println!("note: the adapter has no timestamp queries; skipping");
+        return;
+    }
+    let limits = adapter.limits();
+    let Some(gpu) = device_with(adapter, limits, wgpu::Features::TIMESTAMP_QUERY) else {
+        return;
+    };
+    let scope = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let mut renderer = SceneRenderer::new(
+        &gpu.device,
+        &gpu.queue,
+        FORMAT,
+        1,
+        G,
+        ThemeId::NeonHall,
+        RenderMode::Basic,
+        &gpu.caps,
+    );
+    renderer
+        .enable_gpu_stats(&gpu.device, &gpu.queue)
+        .expect("stats on a device with timestamps");
+    let line = stats_line(&gpu, &mut renderer);
+    let [shadow, reflection, main, post] = stats_ms(&line);
+    assert!(main > 0.0, "{line}");
+    assert_eq!([shadow, reflection, post], [0.0; 3], "{line}");
+    let error = pollster::block_on(scope.pop());
+    assert!(error.is_none(), "validation error: {error:?}");
+}
+
+#[test]
+fn stats_without_timestamp_queries_give_the_unsupported_line_and_frames_still_draw() {
+    let Some(adapter) = adapter() else { return };
+    let limits = adapter.limits();
+    let Some(gpu) = device(adapter, limits) else {
+        return;
+    };
+    let mut renderer = SceneRenderer::new(
+        &gpu.device,
+        &gpu.queue,
+        FORMAT,
+        1,
+        G,
+        ThemeId::NeonHall,
+        RenderMode::Full,
+        &gpu.caps,
+    );
+    assert_eq!(
+        renderer.enable_gpu_stats(&gpu.device, &gpu.queue),
+        Err(stats_unsupported_line())
+    );
+    let image = render(&gpu, &mut renderer, 1, &lane_camera(), &racked_pins());
+    assert!(brightness(image.at(W / 2, H / 2)) > 0);
+    assert_eq!(renderer.take_stats_line(), None);
 }

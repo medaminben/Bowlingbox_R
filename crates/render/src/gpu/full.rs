@@ -6,6 +6,7 @@ use super::capabilities::{HDR_FORMAT, catch_errors};
 use super::pipelines::{
     Pipelines, SCENE_FORMAT, SceneOutput, ScenePipelines, TONEMAP, mirror_pipeline, shadow_pipeline,
 };
+use super::stats::{PassWrites, TimedPass};
 use super::targets::{BLOOM_LEVELS, FrameSizes, HdrTargets, Reflection, ShadowMap, TargetLayouts};
 use std::borrow::Cow;
 use std::num::NonZeroU64;
@@ -338,10 +339,12 @@ impl FullPath {
         casters: impl FnOnce(&mut wgpu::RenderPass<'_>, &wgpu::RenderPipeline),
         mirrored: impl FnOnce(&mut wgpu::RenderPass<'_>, &wgpu::RenderPipeline),
         draw: impl FnOnce(&mut wgpu::RenderPass<'_>),
+        timer: Option<PassWrites<'_>>,
     ) {
         let Some(t) = &self.targets else {
             return;
         };
+        let at = |pass, begin, end| timer.map(|w| w.span(pass, begin, end));
         if options.shadows {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("shadow"),
@@ -354,6 +357,7 @@ impl FullPath {
                     }),
                     stencil_ops: None,
                 }),
+                timestamp_writes: at(TimedPass::Shadow, true, true),
                 ..Default::default()
             });
             casters(&mut pass, &self.shadow);
@@ -379,6 +383,7 @@ impl FullPath {
                     }),
                     stencil_ops: None,
                 }),
+                timestamp_writes: at(TimedPass::Reflection, true, true),
                 ..Default::default()
             });
             mirrored(&mut pass, &self.mirror);
@@ -403,6 +408,7 @@ impl FullPath {
                     }),
                     stencil_ops: None,
                 }),
+                timestamp_writes: at(TimedPass::Main, true, true),
                 ..Default::default()
             });
             // Bound even when the passes are off: the lit pipeline's layout has the groups.
@@ -410,11 +416,21 @@ impl FullPath {
             pass.set_bind_group(3, &t.reflection.group, &[]);
             draw(&mut pass);
         }
+        // The post time runs from the first of these passes to the end of the composite.
+        let mut post_start = at(TimedPass::Post, true, false);
         if let Some(group) = &t.resolve_group {
-            post_pass(encoder, "hdr resolve", &t.resolved, &self.resolve, group);
+            let writes = post_start.take();
+            post_pass(
+                encoder,
+                "hdr resolve",
+                &t.resolved,
+                &self.resolve,
+                group,
+                writes,
+            );
         }
         if options.bloom {
-            self.record_bloom(encoder, t);
+            self.record_bloom(encoder, t, post_start.take());
         }
         post_pass(
             encoder,
@@ -422,12 +438,19 @@ impl FullPath {
             &t.output,
             &self.composite,
             &t.composite_group,
+            at(TimedPass::Post, post_start.is_some(), true),
         );
     }
 
     /// C++ `PostChain::present`'s bloom: the bright part into the first level, down the chain,
     /// then each level added onto the one above, back to the first.
-    fn record_bloom(&self, encoder: &mut wgpu::CommandEncoder, t: &HdrTargets) {
+    /// `writes` go on the bright pass, the chain's first.
+    fn record_bloom(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        t: &HdrTargets,
+        writes: Option<wgpu::RenderPassTimestampWrites<'_>>,
+    ) {
         let p = &self.bloom;
         post_pass(
             encoder,
@@ -435,14 +458,16 @@ impl FullPath {
             &t.bloom[0],
             &p.bright,
             &t.bright_group,
+            writes,
         );
         for i in 1..BLOOM_LEVELS {
             let group = &t.bloom_groups[i - 1];
-            post_pass(encoder, "bloom down", &t.bloom[i], &p.down, group);
+            post_pass(encoder, "bloom down", &t.bloom[i], &p.down, group, None);
         }
         for i in (1..BLOOM_LEVELS).rev() {
             let group = &t.bloom_groups[i];
-            let mut pass = target_pass(encoder, "bloom up", &t.bloom[i - 1], wgpu::LoadOp::Load);
+            let load = wgpu::LoadOp::Load;
+            let mut pass = target_pass(encoder, "bloom up", &t.bloom[i - 1], load, None);
             pass.set_pipeline(&p.up);
             pass.set_bind_group(0, group, &[]);
             pass.draw(0..3, 0..1);
@@ -456,6 +481,7 @@ fn target_pass<'e>(
     label: &str,
     target: &wgpu::TextureView,
     load: wgpu::LoadOp<wgpu::Color>,
+    timestamp_writes: Option<wgpu::RenderPassTimestampWrites<'_>>,
 ) -> wgpu::RenderPass<'e> {
     encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some(label),
@@ -468,6 +494,7 @@ fn target_pass<'e>(
                 store: wgpu::StoreOp::Store,
             },
         })],
+        timestamp_writes,
         ..Default::default()
     })
 }
@@ -479,13 +506,10 @@ fn post_pass(
     target: &wgpu::TextureView,
     pipeline: &wgpu::RenderPipeline,
     group: &wgpu::BindGroup,
+    timestamp_writes: Option<wgpu::RenderPassTimestampWrites<'_>>,
 ) {
-    let mut pass = target_pass(
-        encoder,
-        label,
-        target,
-        wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-    );
+    let load = wgpu::LoadOp::Clear(wgpu::Color::BLACK);
+    let mut pass = target_pass(encoder, label, target, load, timestamp_writes);
     pass.set_pipeline(pipeline);
     pass.set_bind_group(0, group, &[]);
     pass.draw(0..3, 0..1);
