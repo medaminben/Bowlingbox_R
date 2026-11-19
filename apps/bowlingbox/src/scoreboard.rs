@@ -163,6 +163,46 @@ mod tests {
         assert_eq!(cells[9].total, "15");
     }
 
+    /// Nine gutter frames, then the given balls of the tenth.
+    fn tenth(balls: &[u8]) -> ScoreCalculator {
+        let mut sheet = ScoreCalculator::default();
+        for _ in 0..18 {
+            sheet.roll(0).unwrap();
+        }
+        for pins in balls {
+            sheet.roll(*pins).unwrap();
+        }
+        sheet
+    }
+
+    #[test]
+    fn tenth_frame_strike_strike_seven() {
+        let cells = frames(&tenth(&[10, 10, 7]));
+        assert_eq!(cells[9].marks, ["X", "X", "7"]);
+        assert_eq!(cells[9].total, "27");
+    }
+
+    #[test]
+    fn tenth_frame_strike_then_spare() {
+        let cells = frames(&tenth(&[10, 3, 7]));
+        assert_eq!(cells[9].marks, ["X", "3", "/"]);
+        assert_eq!(cells[9].total, "20");
+    }
+
+    #[test]
+    fn tenth_frame_spare_then_strike() {
+        let cells = frames(&tenth(&[5, 5, 10]));
+        assert_eq!(cells[9].marks, ["5", "/", "X"]);
+        assert_eq!(cells[9].total, "20");
+    }
+
+    #[test]
+    fn the_tenth_frame_total_waits_for_its_bonus_ball() {
+        assert_eq!(frames(&tenth(&[10, 10]))[9].total, "");
+        assert_eq!(frames(&tenth(&[5, 5]))[9].total, "");
+        assert_eq!(frames(&tenth(&[10, 10]))[9].marks, ["X", "X", ""]);
+    }
+
     #[test]
     fn frames_are_two_cells_wide_except_the_last() {
         let l = ScoreboardLayout {

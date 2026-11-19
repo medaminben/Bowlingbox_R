@@ -179,6 +179,78 @@ mod tests {
         );
     }
 
+    /// Nine gutter frames, then the tenth ball by ball: the result after each ball.
+    fn tenth_results(balls: &[u8]) -> Vec<(ThrowResult, String)> {
+        let mut sheet = ScoreCalculator::default();
+        for _ in 0..18 {
+            sheet.roll(0).unwrap();
+        }
+        balls
+            .iter()
+            .map(|pins| {
+                sheet.roll(*pins).unwrap();
+                (
+                    throw_result(&done(*pins), &sheet),
+                    result(&done(*pins), &sheet),
+                )
+            })
+            .collect()
+    }
+
+    fn named(kind: ThrowResult, text: &str) -> (ThrowResult, String) {
+        (kind, text.to_owned())
+    }
+
+    #[test]
+    fn tenth_frame_strike_strike_seven() {
+        assert_eq!(
+            tenth_results(&[10, 10, 7]),
+            [
+                named(ThrowResult::Strike, "STRIKE!"),
+                named(ThrowResult::Strike, "STRIKE!"),
+                named(ThrowResult::Pins, "7 pins"),
+            ]
+        );
+    }
+
+    #[test]
+    fn tenth_frame_strike_then_a_ten_is_a_strike_and_a_spare_after_a_count() {
+        // C++ rule: after a first-ball strike the second ball starts a fresh rack, so ten
+        // pins are a strike; the spare comes on the third ball after a count.
+        assert_eq!(
+            tenth_results(&[10, 3, 7]),
+            [
+                named(ThrowResult::Strike, "STRIKE!"),
+                named(ThrowResult::Pins, "3 pins"),
+                named(ThrowResult::Spare, "SPARE!"),
+            ]
+        );
+    }
+
+    #[test]
+    fn tenth_frame_spare_then_strike() {
+        assert_eq!(
+            tenth_results(&[5, 5, 10]),
+            [
+                named(ThrowResult::Pins, "5 pins"),
+                named(ThrowResult::Spare, "SPARE!"),
+                named(ThrowResult::Strike, "STRIKE!"),
+            ]
+        );
+    }
+
+    #[test]
+    fn tenth_frame_gutter_then_ten_is_a_spare_and_a_gutter_bonus_ball_is_a_gutter() {
+        assert_eq!(
+            tenth_results(&[0, 10, 0]),
+            [
+                named(ThrowResult::Gutter, "Gutter"),
+                named(ThrowResult::Spare, "SPARE!"),
+                named(ThrowResult::Gutter, "Gutter"),
+            ]
+        );
+    }
+
     #[test]
     fn ten_pins_after_a_gutter_ball_is_a_spare() {
         let mut sheet = ScoreCalculator::default();
