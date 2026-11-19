@@ -7,7 +7,7 @@ on:
 
 jobs:
   release:
-    uses: medaminben/buildkit-rust/.github/workflows/release.yml@v0.1.0
+    uses: medaminben/buildkit-rust/.github/workflows/release.yml@v0.3.0
     permissions:
       contents: write
       actions: write

@@ -1,4 +1,4 @@
-# buildkit-rust v0.1.0: copied by cargo bk; refresh with cargo bk upgrade
+# buildkit-rust v0.3.0: copied by cargo bk; refresh with cargo bk upgrade
 [graph]
 all-features = true
 

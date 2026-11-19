@@ -9,7 +9,7 @@ edition = "2024"
 rust-version = "1.100.0"
 
 [workspace.metadata.buildkit]
-version = "0.1.0"
+version = "0.3.0"
 first-release = "2.0.0"
 flow = "beta"
 repo = "medaminben/Bowlingbox_R"
@@ -34,7 +34,7 @@ system-deps.apt = [
 ]
 
 [workspace.dependencies]
-buildkit = { git = "https://github.com/medaminben/buildkit-rust", tag = "v0.1.0" }
+buildkit = { git = "https://github.com/medaminben/buildkit-rust", tag = "v0.3.0" }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

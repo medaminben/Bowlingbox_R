@@ -9,7 +9,7 @@ on:
 
 jobs:
   codeql:
-    uses: medaminben/buildkit-rust/.github/workflows/codeql.yml@v0.1.0
+    uses: medaminben/buildkit-rust/.github/workflows/codeql.yml@v0.3.0
     permissions:
       security-events: write
       actions: read
