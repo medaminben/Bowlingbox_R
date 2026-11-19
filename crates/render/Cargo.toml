@@ -1,0 +1,17 @@
+[package]
+name = "bowlingbox-render"
+version.workspace = true
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bytemuck = "1.25.2"
+glam = "0.34.3"
+wgpu.workspace = true
+
+[dev-dependencies]
+pollster = "1.0.2"

@@ -3,9 +3,9 @@
 Bowlingbox keeps its rules in small crates that need no window, GPU or audio device, and a thin app that
 wires them to an egui window (eframe with the wgpu backend).
 
-Crates: `score` (the scoring rules) and `lane` (the throw and the physics seam) exist now. `render`
-(themes, meshes and the wgpu renderer) and `audio` (the sound catalogue and the output seam) come in
-later milestones. `lane` uses `score`; `render` and `audio` will use neither `lane` nor each other.
+Crates: `score` (the scoring rules), `lane` (the throw and the physics seam) and `render` (themes,
+decor, meshes, lighting maths, the camera and the wgpu scene renderer) exist now. `audio`
+(the sound catalogue and the output seam) comes in a later milestone. `lane` uses `score`; `render` and `audio` will use neither `lane` nor each other.
 Only the app converts between their types.
 
 ## Layout
@@ -16,6 +16,7 @@ Only the app converts between their types.
 | [`crates/score`](crates/score) | `bowlingbox-score`: the ten-pin scoring rules. |
 | [`apps/bowlingbox`](apps/bowlingbox) | `bowlingbox`: the game. |
 | [`crates/lane`](crates/lane) | `bowlingbox-lane`: the lane types, the physics trait and the throw state machine. |
+| [`crates/render`](crates/render) | `bowlingbox-render`: themes, decor layout, meshes, lighting maths, camera, scene description and the wgpu scene renderer. |
 
 Libraries live in `crates/` and hold the logic. Apps live in `apps/` and only wire a library to an interface: a command line or a window. An app depends on a library, never the other way round, so each library can be tested without an interface.
 
@@ -68,22 +69,51 @@ before the ball nears the rack. The app must drain them every frame: the buffer 
   move and turn the aim towards +x.
 - +x is drawn on the right of the screen, so Right moves the ball right. The debug view does this, and
   the 3D camera must too. A right-handed look-at down +z, as in the C++ game, puts +x on the left. The
-  camera must mirror x, or the app's lane-to-render conversion must negate it, with a test that a ball
-  at +x projects right of the screen centre.
+  `render` camera is left-handed (glam's `lh` look-at and perspective), so +x projects right of the
+  screen centre with no conversion; a test covers it. Meshes keep the C++ winding, which appears
+  clockwise on screen: use `FrontFace::Cw`.
 - Rotations are unit quaternions in the order (x, y, z, w).
 - `Pose.position` is the rigid-body origin. For the ball that is its centre. For a pin it is the point
   on its axis `LANE.pin_origin_height` (0.12 m) above its nominal base. That point is not the centre of
   mass, which Rapier computes from the collider shape.
 
+## The scene renderer
+
+`SceneRenderer` draws the basic path of the C++ renderer: the lit shader (GGX key light, hemisphere
+ambient, up to four point lights, fog, emissive materials, wood and ball patterns, tone mapping), the
+sky gradient behind the opaque geometry and the translucent aim guide. Shadows, reflections, an HDR
+target and bloom come in milestone 5. The shaders are WGSL in `crates/render/src/shaders`.
+
+It fits an egui-wgpu paint callback. `prepare` draws the scene into the renderer's own colour and
+depth targets, sized to the view, and returns the command buffer to submit before egui's pass;
+`paint` copies the result into egui's pass. That pass must have no depth attachment (eframe's
+default), because the copy pipeline has none. A zero-size view draws nothing.
+
+The renderer stays within wgpu's WebGL2 downlevel limits, so it also runs on the GL backend. The GPU
+smoke test requests a device with those limits; without an adapter it prints a note and passes.
+`render_mode_from_env` reads `BOWLINGBOX_RENDER`: `basic`, in any case, is the only path so far, and
+`render_mode_warning` gives the one line to print for any other value.
+
+The app wires it in four small modules. `scene_adapter` is the one place that turns a lane `Snapshot`
+into a `SceneDescription` (pins sit `PIN_MESH_OFFSET_Y` along their own up axis, aim guide only while
+aiming or charging). `follow_camera` ports the C++ camera rig: home behind the foul line, follows the
+rolling ball, eases back, and lets the window sleep once it is home. `view3d` keeps the renderer in
+egui-wgpu's callback resources and draws it from a paint callback in the central panel. `cli` parses
+`--theme`, `--mute` (reserved) and `--debug-view` with clap and collects the startup warnings, which
+`main` prints once. The window keeps eframe's defaults (no multisampling, no depth buffer).
+
 ## Dependencies
 
 - `bowlingbox-score` has no dependencies, so it builds and tests without a window or a GPU.
-- `bowlingbox` (the app) uses `bowlingbox-lane` for the throw and `bowlingbox-score` for the sheet, and
+- `bowlingbox` (the app) uses `bowlingbox-lane` for the throw, `bowlingbox-score` for the sheet,
+  `bowlingbox-render` for the 3D view, `clap` for the command line, `glam` for the scene types, and
   `eframe` for the window. `eframe` runs with the wgpu renderer and default features off; only `wgpu`,
   `default_fonts`, `wayland`, `x11` and `accesskit` are on. The app also names `winit` to switch on
   `wayland-csd-adwaita`, so GNOME on Wayland gets a title bar.
 - `buildkit` is a build dependency of the app. It supplies the version string that `--version` and the
   About window show.
+- `bowlingbox-render` depends on `glam`, `bytemuck` and `wgpu`. The workspace pins `wgpu` to the
+  version eframe's `egui-wgpu` uses, so the tree has one wgpu.
 - `bowlingbox-lane` depends on `bowlingbox-score` and `rapier3d`. `render` and `audio` will depend on
   neither `lane` nor each other.
 - The dev profile builds `rapier3d` and `parry3d` with `opt-level = 3`, so a debug build simulates in

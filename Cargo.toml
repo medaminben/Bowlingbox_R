@@ -35,6 +35,8 @@ system-deps.apt = [
 
 [workspace.dependencies]
 buildkit = { git = "https://github.com/medaminben/buildkit-rust", tag = "v0.3.0" }
+# The version eframe 0.37's egui-wgpu resolves to: one wgpu in the tree.
+wgpu = "30.0.2"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
