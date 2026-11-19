@@ -1,6 +1,6 @@
 //! The command line and what the app does with it at startup.
 
-use bowlingbox_render::{ThemeId, render_mode_warning, theme, theme_from_name};
+use bowlingbox_render::{ThemeId, render_mode_warning, theme_from_name};
 use clap::Parser;
 
 #[derive(Parser, Debug, Default)]
@@ -37,8 +37,7 @@ impl Cli {
             None => ThemeId::NeonHall,
             Some(name) => theme_from_name(name).unwrap_or_else(|| {
                 warnings.push(format!(
-                    "theme: unknown theme '{name}' (neon, classic, outdoor); using {}",
-                    theme(ThemeId::NeonHall).label
+                    "unknown theme '{name}'; use neon, classic or outdoor"
                 ));
                 ThemeId::NeonHall
             }),
@@ -89,7 +88,7 @@ mod tests {
         assert_eq!(startup.theme, ThemeId::NeonHall);
         assert_eq!(
             startup.warnings,
-            ["theme: unknown theme 'space' (neon, classic, outdoor); using Neon Hall"]
+            ["unknown theme 'space'; use neon, classic or outdoor"]
         );
     }
 
