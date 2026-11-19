@@ -153,11 +153,12 @@ pub fn cylinder_data(radius: f32, height: f32, segments: u32) -> MeshData {
     )
 }
 
-/// A cone along y, centred on the origin: base circle at the bottom, tip at the top.
+/// A closed cone along y, centred on the origin: base disc at the bottom, tip at the top.
 #[must_use]
 pub fn cone_data(radius: f32, height: f32, segments: u32) -> MeshData {
     let h = height / 2.0;
-    lathe_data(&[(radius, -h), (0.0, h)], segments)
+    // The rim twice: the base faces down, the side keeps its own slanted normal.
+    lathe_data(&[(0.0, -h), (radius, -h), (radius, -h), (0.0, h)], segments)
 }
 
 /// A bowling pin whose origin is `com_height` above the base, to match the physics body. It spans

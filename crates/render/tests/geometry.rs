@@ -106,3 +106,38 @@ fn every_mesh_winds_counter_clockwise_from_outside() {
     expect_outward_winding(&cone_data(0.5, 1.0, 24));
     expect_outward_winding(&pin_data(0.38, 0.06, 0.12, 40));
 }
+
+/// Every edge of the welded mesh (vertices at one position merged, zero-area triangles left out)
+/// lies on exactly two triangles, once in each direction: no hole, no flipped triangle.
+fn expect_closed(m: &MeshData) {
+    use std::collections::HashMap;
+    // Positions to 0.1 mm; adding 0 turns -0 into 0, so both get the same bits.
+    let key = |i: u32| m.positions[i as usize].map(|c| ((c * 1e4).round() + 0.0).to_bits());
+    let mut edges: HashMap<_, i32> = HashMap::new();
+    for t in m.indices.as_chunks::<3>().0 {
+        let k = t.map(key);
+        if k[0] == k[1] || k[1] == k[2] || k[2] == k[0] {
+            continue;
+        }
+        for (a, b) in [(k[0], k[1]), (k[1], k[2]), (k[2], k[0])] {
+            *edges.entry((a, b)).or_default() += 1;
+        }
+    }
+    for (&(a, b), &count) in &edges {
+        assert_eq!(count, 1, "edge {a:?}-{b:?} used {count} times one way");
+        assert_eq!(
+            edges.get(&(b, a)),
+            Some(&1),
+            "edge {a:?}-{b:?} has no triangle on its other side"
+        );
+    }
+}
+
+#[test]
+fn every_solid_mesh_is_closed() {
+    expect_closed(&box_data(0.5, 0.5, 0.5));
+    expect_closed(&sphere_data(0.109, 48));
+    expect_closed(&cylinder_data(0.5, 1.0, 24));
+    expect_closed(&pin_data(0.38, 0.06, 0.12, 40));
+    expect_closed(&cone_data(0.5, 1.0, 24));
+}
