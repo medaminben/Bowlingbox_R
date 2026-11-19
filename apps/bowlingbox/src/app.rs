@@ -279,6 +279,9 @@ impl<A: eframe::App> eframe::App for RedrawAlways<A> {
 }
 
 #[cfg(test)]
+mod acceptance;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::settings_store::test_storage::Fake;
