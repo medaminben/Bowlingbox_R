@@ -3,5 +3,6 @@ Type=Application
 Name=Bowlingbox
 Exec=bowlingbox
 Icon=bowlingbox
-Categories=Utility;
+Categories=Game;SportsGame;
+StartupWMClass=Bowlingbox
 Terminal=false
