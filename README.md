@@ -2,8 +2,21 @@
 
 Bowlingbox is a 3D ten-pin bowling game rebuilt in Rust. It follows up
 [Bowlingbox 1.5.5](https://github.com/medaminben/Bowlingbox), the C++ version. The work is in progress
-until v2.0.0. Today the window shows the lane in 3D with a following camera, with the scoreboard on top and a power bar, a hint and the throw result below it, so you
-can play a full game with the keyboard. Three themes are built in, and the game plays its sounds.
+until v2.0.0.
+
+What the game has:
+
+- A 3D lane with a following camera, in three themes (Neon Hall, Classic Alley and Outdoor), with shadows,
+  lane reflection and bloom where the GPU supports them.
+- A scoreboard, power bar, hint and throw result around the 3D view, a menu bar (Game, View, Sound, Help)
+  and the Controls and About windows. Everything scales with the window.
+- Physics on Rapier and a full ten-frame game with the standard scoring.
+- Sound: rolling, pin knocks, strike and spare cues and an ambience for each theme. Mute, volume and
+  ambience are remembered between runs.
+- `--theme`, `--mute`, `--debug-view` and `--screen` on the command line.
+
+The acceptance checklist for v2.0.0 and where each item stands is in
+[docs/ACCEPTANCE.md](docs/ACCEPTANCE.md).
 
 ## Build and run
 
@@ -50,4 +63,5 @@ The menu and the HUD use the Rubik font (SIL Open Font License); its licence is 
 ## Documentation
 
 - [Architecture](docs/ARCHITECTURE.md): how the crates and apps fit together.
+- [Acceptance checklist](docs/ACCEPTANCE.md): the bar for v2.0.0 and its status.
 - [User manual](docs/manual/content/en/index.md): the pages that ship with the app.
