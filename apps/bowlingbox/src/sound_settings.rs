@@ -1,8 +1,5 @@
 //! The player's sound preferences: what the Sound menu and keys change.
 
-// Used by the window once it drives the sound director.
-#![allow(dead_code)]
-
 use crate::command::Command;
 
 pub const VOLUME_STEP: i32 = 10;

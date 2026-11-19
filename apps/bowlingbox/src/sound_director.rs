@@ -2,9 +2,6 @@
 //!
 //! Pure logic: it only talks to the [`AudioOutput`] it is given on each call.
 
-// Used by the window once it drives the sound director.
-#![allow(dead_code)]
-
 use bowlingbox_audio::{AudioOutput, LoopSlot, SoundId, Voice};
 use bowlingbox_lane::{Body, Impact, LANE, Phase, Snapshot};
 use bowlingbox_score::ScoreSheet;
@@ -164,6 +161,7 @@ impl SoundDirector {
         self.update_ambience(out);
     }
 
+    #[cfg(test)]
     pub fn ambience_enabled(&self) -> bool {
         self.ambience
     }

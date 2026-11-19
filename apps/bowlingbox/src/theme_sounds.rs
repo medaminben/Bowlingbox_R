@@ -1,8 +1,5 @@
 //! The ambience loop of each theme: the one place where render themes meet audio sounds.
 
-// Used by the window once it drives the sound director.
-#![allow(dead_code)]
-
 use bowlingbox_audio::SoundId;
 use bowlingbox_render::ThemeId;
 

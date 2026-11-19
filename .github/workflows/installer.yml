@@ -15,7 +15,7 @@ permissions:
 
 env:
   # Build dependencies of eframe on Linux, always installed.
-  BUILD_APT: libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev
+  BUILD_APT: libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev libasound2-dev
 
 jobs:
   windows:

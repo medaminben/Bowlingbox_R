@@ -11,9 +11,8 @@ pub struct Cli {
     /// Look of the hall: neon, classic or outdoor (any letter case)
     #[arg(long, value_name = "NAME")]
     pub theme: Option<String>,
-    /// Start without sound (sound arrives in a later version)
+    /// Start without sound (this session only)
     #[arg(long)]
-    #[allow(dead_code)] // reserved for the sound milestone
     pub mute: bool,
     /// Show the top-down physics view instead of the 3D view
     #[arg(long)]
@@ -25,6 +24,7 @@ pub struct Cli {
 pub struct Startup {
     pub theme: ThemeId,
     pub debug_view: bool,
+    pub mute: bool,
     pub render_mode: RenderMode,
     /// Lines for stderr, each printed once at startup.
     pub warnings: Vec<String>,
@@ -48,6 +48,7 @@ impl Cli {
         Startup {
             theme: theme_id,
             debug_view: self.debug_view,
+            mute: self.mute,
             render_mode: render_mode_from_env(render_env),
             warnings,
         }
@@ -81,6 +82,7 @@ mod tests {
             Startup {
                 theme: ThemeId::Outdoor,
                 debug_view: false,
+                mute: false,
                 render_mode: RenderMode::Full,
                 warnings: vec![],
             }
@@ -108,6 +110,12 @@ mod tests {
         let basic = parse(&[]).startup(Some("BASIC"));
         assert_eq!(basic.warnings, Vec::<String>::new());
         assert_eq!(basic.render_mode, RenderMode::Basic);
+    }
+
+    #[test]
+    fn mute_starts_muted_and_the_default_does_not() {
+        assert!(parse(&["--mute"]).startup(None).mute);
+        assert!(!parse(&[]).startup(None).mute);
     }
 
     #[test]

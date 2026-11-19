@@ -243,6 +243,14 @@ mod tests {
         }
     }
 
+    // egui-winit reports the keypad + as Key::Plus and the keypad - as Key::Minus (see
+    // `key_from_key_code`), so the keypad needs no mapping of its own.
+    #[test]
+    fn keypad_plus_and_minus_arrive_as_plus_and_minus() {
+        assert_eq!(Key::from_name("NumpadAdd"), Some(Key::Plus));
+        assert_eq!(Key::from_name("NumpadSubtract"), Some(Key::Minus));
+    }
+
     #[test]
     fn toggles_fire_once_per_press() {
         let mut latch = KeyLatch::default();
