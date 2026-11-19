@@ -9,6 +9,7 @@ use bowlingbox_render::{
     linear_to_srgb, srgb_to_linear_vec3, theme,
 };
 use glam::Vec3;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 const G: SceneGeometry = SceneGeometry {
     lane_half_width: 0.525,
@@ -30,14 +31,20 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// sRGB bytes; the scene goes through an 8-bit target before the sRGB one.
 const TOLERANCE: i32 = 3;
 
+/// Creating instances and pipelines concurrently crashes some Vulkan loaders, so every GPU test
+/// holds this lock from the first instance until its device is dropped.
+static GPU_LOCK: Mutex<()> = Mutex::new(());
+
 struct Gpu {
     device: wgpu::Device,
     queue: wgpu::Queue,
+    _lock: MutexGuard<'static, ()>,
 }
 
 /// A device limited to the WebGL2 downlevel defaults, so the test also checks the basic path stays
 /// within what wgpu's GL backend offers.
 fn gpu() -> Option<Gpu> {
+    let lock = GPU_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
     let instance =
         wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -64,7 +71,11 @@ fn gpu() -> Option<Gpu> {
     }))
     .map_err(|err| eprintln!("note: device request failed ({err}); skipping the GPU smoke test"))
     .ok()?;
-    Some(Gpu { device, queue })
+    Some(Gpu {
+        device,
+        queue,
+        _lock: lock,
+    })
 }
 
 fn ball_at(position: Vec3) -> SceneDescription {
