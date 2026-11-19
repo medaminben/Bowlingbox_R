@@ -39,8 +39,9 @@ pub struct LaneDimensions {
     pub ball_radius: f32,
     pub pin_height: f32,
     pub pin_max_radius: f32,
-    /// Rigid-body origin above the pin base.
-    pub pin_com_height: f32,
+    /// Rigid-body origin above the nominal pin base, as C++ `pinComHeight`. Not the centre of
+    /// mass: Rapier computes that from the collider shape (about 0.153 m above the base).
+    pub pin_origin_height: f32,
     pub pin_spacing: f32,
     pub head_pin_z: f32,
 }
@@ -55,7 +56,7 @@ pub const LANE: LaneDimensions = LaneDimensions {
     ball_radius: 0.109,
     pin_height: 0.38,
     pin_max_radius: 0.06,
-    pin_com_height: 0.12,
+    pin_origin_height: 0.12,
     pin_spacing: 0.3048,
     head_pin_z: 17.4,
 };

@@ -281,13 +281,13 @@ fn set_sleep_thresholds(body: &mut RigidBody) {
     activation.angular_threshold = SLEEP_ANGULAR;
 }
 
-/// Two stacked cylinders as in C++, origin `pin_com_height` above the base.
+/// Two stacked cylinders as in C++, origin `pin_origin_height` above the base.
 fn pin_collider() -> ColliderBuilder {
     let d = LANE;
     let lower = SharedShape::cylinder(0.08, d.pin_max_radius);
     let upper = SharedShape::cylinder(0.09, 0.035);
-    let lower_y = 0.10 - d.pin_com_height;
-    let upper_y = 0.29 - d.pin_com_height;
+    let lower_y = 0.10 - d.pin_origin_height;
+    let upper_y = 0.29 - d.pin_origin_height;
     let shape = SharedShape::compound(vec![
         (RPose::translation(0.0, lower_y, 0.0), lower),
         (RPose::translation(0.0, upper_y, 0.0), upper),
@@ -394,7 +394,7 @@ impl RapierWorld {
         let pins = std::array::from_fn(|i| {
             let (x, z) = spots[i];
             let mut body = RigidBodyBuilder::dynamic()
-                .translation(Vector::new(x, d.pin_com_height, z))
+                .translation(Vector::new(x, d.pin_origin_height, z))
                 .ccd_enabled(true)
                 .angular_damping(PIN_ANGULAR_DAMPING)
                 .build();
@@ -499,7 +499,7 @@ impl PhysicsWorld for RapierWorld {
         for (i, (x, z)) in spots.into_iter().enumerate() {
             self.engine.bodies[self.pins[i]].set_enabled(true);
             self.in_play[i] = true;
-            self.teleport(self.pins[i], Vector::new(x, LANE.pin_com_height, z));
+            self.teleport(self.pins[i], Vector::new(x, LANE.pin_origin_height, z));
         }
     }
 
