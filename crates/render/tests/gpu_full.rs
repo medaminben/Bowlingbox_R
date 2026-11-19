@@ -14,6 +14,7 @@ use bowlingbox_render::{
     stats_unsupported_line, theme,
 };
 use glam::{Vec3, Vec4Swizzles};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 const G: SceneGeometry = SceneGeometry {
     lane_half_width: 0.525,
@@ -35,14 +36,37 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// sRGB bytes; the scene goes through an 8-bit target before the sRGB one.
 const TOLERANCE: i32 = 3;
 
+/// Creating instances and pipelines concurrently crashes some Vulkan loaders, so every GPU test
+/// holds this lock from the first instance until its device is dropped.
+static GPU_LOCK: Mutex<()> = Mutex::new(());
+
+fn lock_gpu() -> MutexGuard<'static, ()> {
+    GPU_LOCK.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 struct Gpu {
     adapter: wgpu::Adapter,
     device: wgpu::Device,
     queue: wgpu::Queue,
     caps: Capabilities,
+    _lock: MutexGuard<'static, ()>,
 }
 
-fn adapter() -> Option<wgpu::Adapter> {
+/// An adapter together with the GPU lock.
+struct Held {
+    adapter: wgpu::Adapter,
+    lock: MutexGuard<'static, ()>,
+}
+
+impl std::ops::Deref for Held {
+    type Target = wgpu::Adapter;
+    fn deref(&self) -> &wgpu::Adapter {
+        &self.adapter
+    }
+}
+
+fn adapter() -> Option<Held> {
+    let lock = lock_gpu();
     let instance =
         wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
     let request = |force_fallback_adapter| {
@@ -57,18 +81,15 @@ fn adapter() -> Option<wgpu::Adapter> {
     };
     let info = adapter.get_info();
     println!("adapter: {} ({:?})", info.name, info.backend);
-    Some(adapter)
+    Some(Held { adapter, lock })
 }
 
-fn device(adapter: wgpu::Adapter, limits: wgpu::Limits) -> Option<Gpu> {
+fn device(adapter: Held, limits: wgpu::Limits) -> Option<Gpu> {
     device_with(adapter, limits, wgpu::Features::empty())
 }
 
-fn device_with(
-    adapter: wgpu::Adapter,
-    limits: wgpu::Limits,
-    features: wgpu::Features,
-) -> Option<Gpu> {
+fn device_with(held: Held, limits: wgpu::Limits, features: wgpu::Features) -> Option<Gpu> {
+    let Held { adapter, lock } = held;
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("gpu full"),
         required_features: features,
@@ -83,6 +104,7 @@ fn device_with(
         device,
         queue,
         caps,
+        _lock: lock,
     })
 }
 

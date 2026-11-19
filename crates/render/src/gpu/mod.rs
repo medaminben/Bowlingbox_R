@@ -52,9 +52,32 @@ pub fn render_mode_warning(value: Option<&str>) -> Option<String> {
     }
 }
 
+/// Creating instances and pipelines concurrently crashes some Vulkan loaders, so every test that
+/// uses a device holds this lock until the device is dropped.
+#[cfg(test)]
+static TEST_GPU_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// A test device and the lock that serialises GPU tests; the device drops first.
+#[cfg(test)]
+struct TestDevice {
+    device: wgpu::Device,
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl std::ops::Deref for TestDevice {
+    type Target = wgpu::Device;
+    fn deref(&self) -> &wgpu::Device {
+        &self.device
+    }
+}
+
 /// A device on the first adapter for the module tests; `None` (with a note) without one.
 #[cfg(test)]
-fn test_device() -> Option<wgpu::Device> {
+fn test_device() -> Option<TestDevice> {
+    let lock = TEST_GPU_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let instance =
         wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
     let adapter =
@@ -68,5 +91,8 @@ fn test_device() -> Option<wgpu::Device> {
     }))
     .map_err(|err| println!("note: device request failed ({err}); skipping"))
     .ok()?;
-    Some(device)
+    Some(TestDevice {
+        device,
+        _lock: lock,
+    })
 }
