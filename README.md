@@ -15,8 +15,11 @@ cargo run -p bowlingbox
 
 `cargo run -p bowlingbox -- --version` prints the version and exits. `--theme=neon|classic|outdoor` picks the
 look at start (any letter case; an unknown name prints a warning and gives Neon Hall), and `--debug-view` draws the
-top-down physics view instead of the 3D view. `BOWLINGBOX_RENDER=basic` is the only render path so far; any
-other value prints a warning. In the window, Esc and Ctrl+Q quit. With the About window open, either key closes it first. With a menu open,
+top-down physics view instead of the 3D view. The 3D view uses the full render path (shadows, lane reflection,
+bloom) where the GPU supports it and the basic path otherwise; stderr then gets one `render: ...` line with the
+reason. `BOWLINGBOX_RENDER=basic` forces the basic path, `full` or no value picks the full path where supported,
+and any other value prints a warning. `BOWLINGBOX_RENDER_STATS=1` prints the GPU time of each pass about once a
+second. In the window, Esc and Ctrl+Q quit. With the About window open, either key closes it first. With a menu open,
 Esc closes the menu and Ctrl+Q does nothing.
 
 Controls: Left and Right move the ball, A and D turn the aim, hold Space to charge the throw and release it to

@@ -1,5 +1,5 @@
-// Shared by lit.wgsl, guide.wgsl and sky.wgsl: the per-frame and per-draw uniforms, the tone map
-// and the mesh vertex stage. The renderer fills the uniforms in the same field order.
+// Shared by lit.wgsl, guide.wgsl and sky.wgsl: the per-frame and per-draw uniforms and the mesh
+// vertex stage. The renderer fills the uniforms in the same field order.
 
 struct Frame {
     view: mat4x4<f32>,
@@ -17,6 +17,10 @@ struct Frame {
     point_color: array<vec4<f32>, 4>, // colour * intensity
     params: vec4<f32>,         // fog start, fog end, exposure, point light count
     lane: vec4<f32>,           // lane half width, board width, pin deck z, unused
+    light_vp: mat4x4<f32>,     // the key light's view projection (shadow map)
+    shadow: vec4<f32>,         // shadows 0/1 (full path only), unused
+    clip_plane: vec4<f32>,     // world space, mirrored pass only; (0, 0, 0, 1) keeps everything
+    reflect: vec4<f32>,        // scene target width, height; lane reflection 0/1 (full path), unused
 }
 
 struct Draw {
@@ -25,22 +29,11 @@ struct Draw {
     color: vec4<f32>,          // linear rgb, alpha
     band: vec4<f32>,           // neck stripe min y, max y (object space); emissive 0/1, emissive strength
     surface: vec4<f32>,        // roughness, specular, pattern (0 none, 1 wood, 2 ball swirl), fog 0/1
+    flags: vec4<f32>,          // the main lane 0/1 (shows the reflection), unused
 }
 
 @group(0) @binding(0) var<uniform> frame: Frame;
 @group(1) @binding(0) var<uniform> draw: Draw;
-
-fn aces_fit(x: vec3<f32>) -> vec3<f32> {  // Narkowicz 2015
-    return clamp(x * (2.51 * x + 0.03) / (x * (2.43 * x + 0.59) + 0.14), vec3(0.0), vec3(1.0));
-}
-
-fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
-    return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c));
-}
-
-fn to_display(hdr: vec3<f32>, exposure: f32) -> vec3<f32> {
-    return linear_to_srgb(aces_fit(hdr * exposure));
-}
 
 struct MeshIn {
     @location(0) pos: vec3<f32>,

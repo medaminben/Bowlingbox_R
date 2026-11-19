@@ -1,6 +1,8 @@
-// The C++ lit shader's basic path (Shaders.cpp kLitBody) without shadow and reflection sampling:
-// GGX key light, hemisphere ambient, up to four point lights, distance fog, emissive materials,
-// procedural wood and ball patterns, tone mapped to sRGB here.
+// The C++ lit shader (Shaders.cpp kLitBody): GGX key light, hemisphere ambient, up to four point
+// lights, distance fog, emissive materials, procedural wood and ball patterns. `fs_lit` (basic
+// path) tone maps to sRGB here; `fs_lit_hdr` (full path) adds the key light's shadow and the lane
+// reflection and writes linear HDR for the composite to tone map; `fs_lit_mirror` draws the
+// mirrored scene the lane reflects.
 
 const PI: f32 = 3.14159265;
 
@@ -134,8 +136,40 @@ fn brdf(n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, albedo: vec3<f32>, radiance: v
     return (diff + spec) * radiance * n_dot_l;
 }
 
-@fragment
-fn fs_lit(in: MeshOut) -> @location(0) vec4<f32> {
+// Full path only: the basic path's layout has no group 2.
+@group(2) @binding(0) var shadow_map: texture_depth_2d;
+@group(2) @binding(1) var shadow_sampler: sampler_comparison;  // less-equal, linear
+
+// How much of the key light reaches `world_pos`, 0..1 (C++ keyLightVisible).
+fn key_light_visible(n: vec3<f32>, world_pos: vec3<f32>) -> f32 {
+    if frame.shadow.x < 0.5 {
+        return 1.0;
+    }
+    let clip = frame.light_vp * vec4(world_pos, 1.0);
+    let ndc = clip.xyz / clip.w;
+    // Texture v runs down while NDC y runs up; depth is already 0..1.
+    let p = vec3(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5, ndc.z);
+    if any(p < vec3(0.0)) || any(p > vec3(1.0)) {
+        return 1.0;  // outside: lit
+    }
+    let bias = max(0.0025 * (1.0 - max(dot(n, -frame.light_dir.xyz), 0.0)), 0.0005);
+    // Each tap is a bilinear 2x2 compare (linear filtering), so four taps at +-0.5 texel cover
+    // the same 3x3-texel tent footprint as nine point taps. The Level variant needs no
+    // derivatives, so it may run outside uniform control flow.
+    let h = 0.5 / vec2<f32>(textureDimensions(shadow_map));
+    let z = p.z - bias;
+    return 0.25 * (textureSampleCompareLevel(shadow_map, shadow_sampler, p.xy + vec2(-h.x, -h.y), z)
+                 + textureSampleCompareLevel(shadow_map, shadow_sampler, p.xy + vec2(h.x, -h.y), z)
+                 + textureSampleCompareLevel(shadow_map, shadow_sampler, p.xy + vec2(-h.x, h.y), z)
+                 + textureSampleCompareLevel(shadow_map, shadow_sampler, p.xy + vec2(h.x, h.y), z));
+}
+
+// Full path main pass only: the mirrored scene, half size (C++ uReflection).
+@group(3) @binding(0) var reflection_map: texture_2d<f32>;
+@group(3) @binding(1) var reflection_sampler: sampler;  // linear, clamped
+
+// Linear HDR colour before fog. `key_visible` scales the key light (1 without shadows).
+fn surface(in: MeshOut, key_visible: f32) -> vec3<f32> {
     let dpx = fwidth(in.world_pos.x);
     let in_band = in.local_pos.y >= draw.band.x && in.local_pos.y <= draw.band.y;
     var base = select(draw.color.rgb, frame.band_color.rgb, in_band);
@@ -146,39 +180,88 @@ fn fs_lit(in: MeshOut) -> @location(0) vec4<f32> {
         base = swirl(base, in.local_pos);
     }
 
-    let emissive = draw.band.z > 0.5;
-    var rgb: vec3<f32>;
-    if emissive {
-        rgb = base * draw.band.w;
-    } else {
-        let roughness = draw.surface.x;
-        let specular = draw.surface.y;
-        let n = normalize(in.normal);
-        let v = normalize(frame.camera_pos.xyz - in.world_pos);
-        rgb = mix(frame.ground_ambient.rgb, frame.sky_ambient.rgb, n.y * 0.5 + 0.5) * base;
-        rgb += brdf(n, v, -frame.light_dir.xyz, base, frame.key_color.rgb);
-        let count = i32(frame.params.w + 0.5);
-        for (var i = 0; i < count; i++) {
-            let to_light = frame.point_pos[i].xyz - in.world_pos;
-            let d = length(to_light);
-            let range = frame.point_pos[i].w;
-            if d >= range {
-                continue;  // the window below is zero: skip the BRDF
-            }
-            let window = clamp(1.0 - pow(d / range, 4.0), 0.0, 1.0);
-            let radiance = frame.point_color[i].rgb * window * window / (d * d + 1.0);
-            let l = to_light / d;
-            // Rough surfaces show no visible point-light highlight: Lambert is enough there.
-            if roughness >= 0.6 {
-                rgb += (1.0 - specular) * base / PI * radiance * max(dot(n, l), 0.0);
-            } else {
-                rgb += brdf(n, v, l, base, radiance);
-            }
+    if draw.band.z > 0.5 {
+        return base * draw.band.w;
+    }
+    let roughness = draw.surface.x;
+    let specular = draw.surface.y;
+    let n = normalize(in.normal);
+    let v = normalize(frame.camera_pos.xyz - in.world_pos);
+    var rgb = mix(frame.ground_ambient.rgb, frame.sky_ambient.rgb, n.y * 0.5 + 0.5) * base;
+    rgb += brdf(n, v, -frame.light_dir.xyz, base, frame.key_color.rgb) * key_visible;
+    let count = i32(frame.params.w + 0.5);
+    for (var i = 0; i < count; i++) {
+        let to_light = frame.point_pos[i].xyz - in.world_pos;
+        let d = length(to_light);
+        let range = frame.point_pos[i].w;
+        if d >= range {
+            continue;  // the window below is zero: skip the BRDF
+        }
+        let window = clamp(1.0 - pow(d / range, 4.0), 0.0, 1.0);
+        let radiance = frame.point_color[i].rgb * window * window / (d * d + 1.0);
+        let l = to_light / d;
+        // Rough surfaces show no visible point-light highlight: Lambert is enough there.
+        if roughness >= 0.6 {
+            rgb += (1.0 - specular) * base / PI * radiance * max(dot(n, l), 0.0);
+        } else {
+            rgb += brdf(n, v, l, base, radiance);
         }
     }
-    if draw.surface.w > 0.5 {
-        let f = clamp((length(in.view_pos) - frame.params.x) / (frame.params.y - frame.params.x), 0.0, 1.0);
-        rgb = mix(rgb, frame.fog_color.rgb, select(f, 0.5 * f, emissive));
+    return rgb;
+}
+
+fn fog(in: MeshOut, rgb: vec3<f32>) -> vec3<f32> {
+    if draw.surface.w <= 0.5 {
+        return rgb;
     }
-    return vec4(to_display(rgb, frame.params.z), draw.color.a);
+    let f = clamp((length(in.view_pos) - frame.params.x) / (frame.params.y - frame.params.x), 0.0, 1.0);
+    return mix(rgb, frame.fog_color.rgb, select(f, 0.5 * f, draw.band.z > 0.5));
+}
+
+// The mirrored scene blended over the lane (C++ uReflect). `rgb` is the lane before fog.
+fn reflect_lane(in: MeshOut, rgb: vec3<f32>) -> vec3<f32> {
+    let roughness = draw.surface.x;
+    let specular = draw.surface.y;
+    let n = normalize(in.normal);
+    let v = normalize(frame.camera_pos.xyz - in.world_pos);
+    // Both the fragment and the texture coordinates start at the top left.
+    let uv = in.clip.xy / frame.reflect.xy;
+    let o = roughness * 0.004;
+    let r = 0.25 * (textureSampleLevel(reflection_map, reflection_sampler, uv + vec2(o, 0.0), 0.0)
+                   + textureSampleLevel(reflection_map, reflection_sampler, uv - vec2(o, 0.0), 0.0)
+                   + textureSampleLevel(reflection_map, reflection_sampler, uv + vec2(0.0, o), 0.0)
+                   + textureSampleLevel(reflection_map, reflection_sampler, uv - vec2(0.0, o), 0.0));
+    let fresnel = specular + (1.0 - specular) * pow(1.0 - max(dot(n, v), 0.0), 5.0);
+    let k = clamp(fresnel * (1.0 - roughness) * 0.6, 0.0, 1.0);
+    // r is premultiplied (cleared to transparent black): a plain mix would darken soft edges.
+    return rgb * (1.0 - k * r.a) + k * r.rgb;
+}
+
+@fragment
+fn fs_lit(in: MeshOut) -> @location(0) vec4<f32> {
+    return vec4(to_display(fog(in, surface(in, 1.0)), frame.params.z), draw.color.a);
+}
+
+@fragment
+fn fs_lit_hdr(in: MeshOut) -> @location(0) vec4<f32> {
+    let emissive = draw.band.z > 0.5;
+    var key_visible = 1.0;
+    if !emissive {  // emissive surfaces ignore the key light
+        key_visible = key_light_visible(normalize(in.normal), in.world_pos);
+    }
+    var rgb = surface(in, key_visible);
+    if !emissive && frame.reflect.z > 0.5 && draw.flags.x > 0.5 {
+        rgb = reflect_lane(in, rgb);
+    }
+    return vec4(fog(in, rgb), draw.color.a);
+}
+
+// The scene mirrored in the lane plane (C++ reflectionPass): no shadows, no reflection, and the
+// C++ clip plane as a discard, so nothing below the lane shows in the mirror.
+@fragment
+fn fs_lit_mirror(in: MeshOut) -> @location(0) vec4<f32> {
+    if dot(vec4(in.world_pos, 1.0), frame.clip_plane) < 0.0 {
+        discard;
+    }
+    return vec4(fog(in, surface(in, 1.0)), draw.color.a);
 }

@@ -208,3 +208,14 @@ impl eframe::App for App {
         }
     }
 }
+
+/// The app, repainted every frame even while it waits for input, so `BOWLINGBOX_RENDER_STATS`
+/// has frames to time.
+pub struct RedrawAlways(pub App);
+
+impl eframe::App for RedrawAlways {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        self.0.ui(ui, frame);
+        ui.ctx().request_repaint();
+    }
+}

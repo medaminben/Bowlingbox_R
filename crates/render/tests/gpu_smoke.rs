@@ -5,8 +5,8 @@
 #![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 
 use bowlingbox_render::{
-    Camera, SceneDescription, SceneGeometry, SceneRenderer, THEMES, ThemeId, Transform,
-    linear_to_srgb, srgb_to_linear_vec3, theme,
+    Camera, Capabilities, RenderMode, SceneDescription, SceneGeometry, SceneRenderer, THEMES,
+    ThemeId, Transform, linear_to_srgb, srgb_to_linear_vec3, theme,
 };
 use glam::Vec3;
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -38,7 +38,24 @@ static GPU_LOCK: Mutex<()> = Mutex::new(());
 struct Gpu {
     device: wgpu::Device,
     queue: wgpu::Queue,
+    caps: Capabilities,
     _lock: MutexGuard<'static, ()>,
+}
+
+impl Gpu {
+    /// A basic-path renderer, as milestone 4 drew.
+    fn renderer(&self, samples: u32, id: ThemeId) -> SceneRenderer {
+        SceneRenderer::new(
+            &self.device,
+            &self.queue,
+            FORMAT,
+            samples,
+            G,
+            id,
+            RenderMode::Basic,
+            &self.caps,
+        )
+    }
 }
 
 /// A device limited to the WebGL2 downlevel defaults, so the test also checks the basic path stays
@@ -71,9 +88,11 @@ fn gpu() -> Option<Gpu> {
     }))
     .map_err(|err| eprintln!("note: device request failed ({err}); skipping the GPU smoke test"))
     .ok()?;
+    let caps = Capabilities::probe(&adapter, &device);
     Some(Gpu {
         device,
         queue,
+        caps,
         _lock: lock,
     })
 }
@@ -238,7 +257,7 @@ fn lane_camera() -> Camera {
 fn every_theme_draws_the_lane_in_front_of_the_sky() {
     let Some(gpu) = gpu() else { return };
     for id in THEMES {
-        let mut renderer = SceneRenderer::new(&gpu.device, &gpu.queue, FORMAT, 1, G, id);
+        let mut renderer = gpu.renderer(1, id);
         let lane = render(&gpu, &mut renderer, 1, &lane_camera(), &empty_scene());
         let centre = lane.at(W / 2, H / 2);
         assert!(
@@ -268,7 +287,7 @@ fn every_theme_draws_the_lane_in_front_of_the_sky() {
 #[test]
 fn outdoor_shows_the_sky_above_the_lane() {
     let Some(gpu) = gpu() else { return };
-    let mut renderer = SceneRenderer::new(&gpu.device, &gpu.queue, FORMAT, 1, G, ThemeId::Outdoor);
+    let mut renderer = gpu.renderer(1, ThemeId::Outdoor);
     let image = render(&gpu, &mut renderer, 1, &lane_camera(), &empty_scene());
     let got = image.at(W / 2, 0);
     let want = sky_bytes(ThemeId::Outdoor, 0);
@@ -278,7 +297,7 @@ fn outdoor_shows_the_sky_above_the_lane() {
 #[test]
 fn a_ball_at_plus_x_lands_right_of_centre() {
     let Some(gpu) = gpu() else { return };
-    let mut renderer = SceneRenderer::new(&gpu.device, &gpu.queue, FORMAT, 1, G, ThemeId::NeonHall);
+    let mut renderer = gpu.renderer(1, ThemeId::NeonHall);
     let camera = lane_camera();
     let without = render(&gpu, &mut renderer, 1, &camera, &empty_scene());
     let with = render(
@@ -309,7 +328,7 @@ fn a_ball_at_plus_x_lands_right_of_centre() {
 #[test]
 fn multisampled_theme_switch_and_aim_guide_render_without_errors() {
     let Some(gpu) = gpu() else { return };
-    let mut renderer = SceneRenderer::new(&gpu.device, &gpu.queue, FORMAT, 4, G, ThemeId::NeonHall);
+    let mut renderer = gpu.renderer(4, ThemeId::NeonHall);
     let mut scene = empty_scene();
     scene.show_aim_guide = true;
     scene.aim_angle_deg = 2.0;
@@ -331,7 +350,7 @@ fn multisampled_theme_switch_and_aim_guide_render_without_errors() {
 fn zero_msaa_samples_clamp_to_one_and_render_without_errors() {
     let Some(gpu) = gpu() else { return };
     let scope = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
-    let mut renderer = SceneRenderer::new(&gpu.device, &gpu.queue, FORMAT, 0, G, ThemeId::NeonHall);
+    let mut renderer = gpu.renderer(0, ThemeId::NeonHall);
     // The scene clamps 0 to 1 sample, so the pass is single-sampled.
     let _ = render(&gpu, &mut renderer, 1, &lane_camera(), &empty_scene());
     let error = pollster::block_on(scope.pop());
@@ -341,7 +360,7 @@ fn zero_msaa_samples_clamp_to_one_and_render_without_errors() {
 #[test]
 fn a_zero_size_rect_draws_nothing() {
     let Some(gpu) = gpu() else { return };
-    let mut renderer = SceneRenderer::new(&gpu.device, &gpu.queue, FORMAT, 1, G, ThemeId::NeonHall);
+    let mut renderer = gpu.renderer(1, ThemeId::NeonHall);
     let camera = lane_camera();
     for size in [[0, 0], [0, 180], [320, 0]] {
         let commands = renderer.prepare(&gpu.device, &gpu.queue, &camera, &empty_scene(), size);
