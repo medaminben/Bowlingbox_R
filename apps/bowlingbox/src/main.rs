@@ -7,7 +7,13 @@ mod follow_camera;
 mod input;
 mod lane_commands;
 mod scene_adapter;
+mod sound_director;
+mod sound_settings;
+mod theme_sounds;
 mod view3d;
+
+#[cfg(test)]
+mod recording_output;
 
 use bowlingbox_render::render_stats_from_env;
 use clap::Parser;

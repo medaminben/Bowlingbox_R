@@ -562,6 +562,7 @@ dependencies = [
 name = "bowlingbox"
 version = "2.0.0"
 dependencies = [
+ "bowlingbox-audio",
  "bowlingbox-lane",
  "bowlingbox-render",
  "bowlingbox-score",
