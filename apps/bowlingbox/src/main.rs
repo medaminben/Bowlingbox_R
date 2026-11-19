@@ -67,6 +67,7 @@ fn main() -> eframe::Result {
                 .as_ref()
                 .ok_or("the window has no wgpu render state")?;
             fonts::install(&cc.egui_ctx);
+            app::configure(&cc.egui_ctx);
             view3d::install(render_state, startup.theme, startup.render_mode, stats);
             let stored = settings_store::load(cc.storage);
             let app = app::App::new(

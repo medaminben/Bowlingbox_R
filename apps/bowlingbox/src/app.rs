@@ -39,6 +39,15 @@ pub struct App {
     sound_menu_pinned: bool,
     /// The last frame asked for no repaint: the window slept until the next input.
     idle: bool,
+    save: SavePolicy,
+}
+
+/// Whether `save` writes the sound settings.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SavePolicy {
+    Settings,
+    /// A `--screen` run writes nothing.
+    Nothing,
 }
 
 impl App {
@@ -65,6 +74,11 @@ impl App {
             dialog: screen.dialog,
             sound_menu_pinned: screen.sound_menu_open,
             idle: false,
+            save: if screen.read_only {
+                SavePolicy::Nothing
+            } else {
+                SavePolicy::Settings
+            },
         }
     }
 
@@ -98,8 +112,12 @@ impl App {
         }
     }
 
-    /// Writes the sound settings to eframe's storage (see `settings_store`).
+    /// Writes the sound settings to eframe's storage (see `settings_store`), unless this is a
+    /// `--screen` run.
     fn save_settings(&self, storage: &mut dyn eframe::Storage) {
+        if self.save == SavePolicy::Nothing {
+            return;
+        }
         settings_store::save(storage, self.sound.persisted());
     }
 
@@ -218,9 +236,19 @@ impl App {
     }
 }
 
+/// Ctrl+'+' and Ctrl+'-' change the volume only; egui's own UI zoom is off.
+pub fn configure(ctx: &egui::Context) {
+    ctx.options_mut(|o| o.zoom_with_keyboard = false);
+}
+
 impl eframe::App for App {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         self.save_settings(storage);
+    }
+
+    /// Only the sound settings persist, not egui's memory (which holds the UI zoom).
+    fn persist_egui_memory(&self) -> bool {
+        false
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -275,6 +303,10 @@ impl<A: eframe::App> eframe::App for RedrawAlways<A> {
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         self.0.save(storage);
+    }
+
+    fn persist_egui_memory(&self) -> bool {
+        self.0.persist_egui_memory()
     }
 }
 
@@ -344,9 +376,51 @@ mod tests {
             fn save(&mut self, _storage: &mut dyn eframe::Storage) {
                 self.0.push("save");
             }
+            fn persist_egui_memory(&self) -> bool {
+                false
+            }
         }
         let mut wrapped = RedrawAlways(Recorder(Vec::new()));
         wrapped.save(&mut Fake::default());
         assert_eq!(wrapped.0.0, ["save"]);
+    }
+
+    #[test]
+    fn redraw_always_forwards_persist_egui_memory() {
+        struct Recorder(bool);
+        impl eframe::App for Recorder {
+            fn ui(&mut self, _ui: &mut egui::Ui, _frame: &mut eframe::Frame) {}
+            fn persist_egui_memory(&self) -> bool {
+                self.0
+            }
+        }
+        // The trait default is true, so a wrapper that forgets to forward would say true.
+        assert!(!RedrawAlways(Recorder(false)).persist_egui_memory());
+        assert!(RedrawAlways(Recorder(true)).persist_egui_memory());
+    }
+
+    #[test]
+    fn the_app_keeps_egui_memory_out_of_storage() {
+        let plain = app(SoundSettings::default(), false, ScreenState::default());
+        assert!(!plain.persist_egui_memory());
+    }
+
+    #[test]
+    fn keyboard_zoom_is_off_after_configure() {
+        let ctx = egui::Context::default();
+        assert!(ctx.options(|o| o.zoom_with_keyboard));
+        configure(&ctx);
+        assert!(!ctx.options(|o| o.zoom_with_keyboard));
+    }
+
+    #[test]
+    fn a_screen_run_saves_nothing() {
+        let mut storage = Fake::default();
+        let screen = ScreenState {
+            read_only: true,
+            ..ScreenState::default()
+        };
+        app(SoundSettings::default(), false, screen).save(&mut storage);
+        assert!(storage.0.is_empty());
     }
 }

@@ -53,12 +53,15 @@ impl Cli {
         };
         let screen = match self.screen.as_deref() {
             None => ScreenState::default(),
-            Some(name) => Screen::parse(name)
-                .unwrap_or_else(|| {
-                    warnings.push(unknown_screen_message(name));
-                    Screen::Game
-                })
-                .state(),
+            Some(name) => ScreenState {
+                read_only: true,
+                ..Screen::parse(name)
+                    .unwrap_or_else(|| {
+                        warnings.push(unknown_screen_message(name));
+                        Screen::Game
+                    })
+                    .state()
+            },
         };
         Startup {
             // A theme screen shows its own theme, whatever `--theme` says.
@@ -154,6 +157,15 @@ mod tests {
     }
 
     #[test]
+    fn any_screen_flag_makes_the_run_read_only() {
+        assert!(!parse(&[]).startup(None).screen.read_only);
+        for name in ["game", "about", "lobby"] {
+            let flag = format!("--screen={name}");
+            assert!(parse(&[&flag]).startup(None).screen.read_only, "{name}");
+        }
+    }
+
+    #[test]
     fn a_theme_screen_wins_over_the_theme_flag() {
         let startup = parse(&["--theme=neon", "--screen=theme-outdoor"]).startup(None);
         assert_eq!(startup.theme, ThemeId::Outdoor);
@@ -170,7 +182,13 @@ mod tests {
                 "unknown screen 'lobby'; use game, controls, about, sound-menu, theme-classic or theme-outdoor"
             ]
         );
-        assert_eq!(startup.screen, ScreenState::default());
+        assert_eq!(
+            startup.screen,
+            ScreenState {
+                read_only: true,
+                ..ScreenState::default()
+            }
+        );
         assert_eq!(startup.theme, ThemeId::NeonHall);
     }
 

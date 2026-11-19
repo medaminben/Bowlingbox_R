@@ -24,6 +24,8 @@ pub struct ScreenState {
     pub sound_menu_open: bool,
     /// Replaces the `--theme` choice.
     pub theme: Option<ThemeId>,
+    /// `--screen` was given: the run saves no settings.
+    pub read_only: bool,
 }
 
 pub fn unknown_screen_message(name: &str) -> String {

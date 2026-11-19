@@ -79,7 +79,7 @@ new game, theme and sound) do nothing until you close it.
 capture it: `game` (the default), `controls`, `about`, `sound-menu` (the Sound menu shown open),
 `theme-classic` and `theme-outdoor`. It changes nothing else. An unknown name prints
 `unknown screen '<name>'; use game, controls, about, sound-menu, theme-classic or theme-outdoor` and the game
-starts normally. A theme screen wins over `--theme`.
+starts normally. A theme screen wins over `--theme`. A run with `--screen` (any name) never saves settings.
 
 For how a game is scored, see [Scoring rules](scoring.md). For what the game remembers, see
 [Settings](settings.md). If something does not work, see
