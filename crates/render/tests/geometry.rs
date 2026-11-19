@@ -54,3 +54,31 @@ fn pin_spans_from_base_to_top_relative_to_com() {
     assert!((min_y(&m) + 0.12).abs() < 1e-5);
     assert!((max_y(&m) - 0.26).abs() < 1e-5);
 }
+
+#[test]
+fn pin_profile_is_smooth() {
+    let segments = 40_usize;
+    let (height, com) = (0.38_f32, 0.12_f32);
+    let m = pin_data(height, 0.06, com, 40);
+    let stride = segments + 1;
+    let rings = m.vertex_count() / stride;
+    assert!(rings >= 40, "{rings} rings");
+    let max_step = 25.0_f32.to_radians(); // the worst step is about 19 degrees
+    let mut prev: Option<f32> = None;
+    for i in 0..rings {
+        // Segment 0: x = radius, z = 0.
+        let [r, y, _] = m.positions[i * stride];
+        let [_, ny, _] = m.normals[i * stride];
+        let nr = m.normals[i * stride][0];
+        if r < 1e-6 || y < -com + 0.01 * height {
+            // poles and the flat base
+            prev = None;
+            continue;
+        }
+        let angle = ny.atan2(nr); // profile normal (n_r, n_y)
+        if let Some(p) = prev {
+            assert!((angle - p).abs() < max_step, "ring {i} at y = {y}");
+        }
+        prev = Some(angle);
+    }
+}
