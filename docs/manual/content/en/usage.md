@@ -13,7 +13,7 @@ Start Bowlingbox from its entry in your applications menu, or run `bowlingbox` i
 The window shows the lane in 3D from behind the foul line, with a cyan guide for your aim. The camera
 follows the ball down the lane and returns when the throw is over. Above the lane are the scoreboard with
 ten frames and a power bar. The bottom line shows the phase of the throw, your score, the pins of the last
-throw and the theme. The sound arrives in a later version.
+throw, the theme and the sound (`volume 80 %` or `sound muted`).
 
 ## Themes
 
@@ -44,9 +44,20 @@ and hold the left button to charge and release it to throw.
 | Space | Hold to charge, release to throw |
 | N | New game |
 | T | Next theme |
+| M | Mute or unmute |
+| + or =, - | Louder, quieter (the keypad keys too) |
+| B | Background ambience on or off |
 | Esc, Ctrl+Q | Quit |
 
-M, B, + and - are reserved for the sound and do nothing yet.
+## Sound
+
+The game plays the rolling ball, the pins, a tone while you charge, a sound for strikes and spares, and a
+background loop for each theme. M mutes. + and - change the volume in steps of 10 %, and changing the volume
+also unmutes. B switches the background loop on or off; the other sounds stay on. The same choices are in the
+**Sound** menu. The settings last for this session. To start without sound, run `bowlingbox --mute`.
+
+If no sound device can be opened, the game runs without sound and prints one line that starts with
+`sound disabled:` in the terminal.
 
 ## Menus
 
@@ -54,6 +65,7 @@ M, B, + and - are reserved for the sound and do nothing yet.
 - **Game, Quit** closes the window. So do Esc and Ctrl+Q. While the About window is open, either key
   closes it first. While a menu is open, Esc closes the menu and Ctrl+Q does nothing.
 - **View, Theme** picks the theme; the current one is marked.
+- **Sound** has Mute, Volume up, Volume down and Background ambience; the first and last are checked while on.
 - **Help, About** shows the version.
 
 For how a game is scored, see [Scoring rules](scoring.md). If something does not work, see

@@ -3,10 +3,10 @@
 Bowlingbox keeps its rules in small crates that need no window, GPU or audio device, and a thin app that
 wires them to an egui window (eframe with the wgpu backend).
 
-Crates: `score` (the scoring rules), `lane` (the throw and the physics seam) and `render` (themes,
-decor, meshes, lighting maths, the camera and the wgpu scene renderer) exist now. `audio`
-(the sound catalogue and the output seam) comes in a later milestone. `lane` uses `score`; `render` and `audio` will use neither `lane` nor each other.
-Only the app converts between their types.
+Crates: `score` (the scoring rules), `lane` (the throw and the physics seam), `render` (themes,
+decor, meshes, lighting maths, the camera and the wgpu scene renderer) and `audio` (the sound
+catalogue and the output seam) exist now. `lane` uses `score`; `render` and `audio` use neither
+`lane` nor each other. Only the app converts between their types.
 
 ## Layout
 
@@ -17,6 +17,7 @@ Only the app converts between their types.
 | [`apps/bowlingbox`](apps/bowlingbox) | `bowlingbox`: the game. |
 | [`crates/lane`](crates/lane) | `bowlingbox-lane`: the lane types, the physics trait and the throw state machine. |
 | [`crates/render`](crates/render) | `bowlingbox-render`: themes, decor layout, meshes, lighting maths, camera, scene description and the wgpu scene renderer. |
+| [`crates/audio`](crates/audio) | `bowlingbox-audio`: the 13 embedded sounds, the audio output trait, a kira output and a silent fallback. |
 
 Libraries live in `crates/` and hold the logic. Apps live in `apps/` and only wire a library to an interface: a command line or a window. An app depends on a library, never the other way round, so each library can be tested without an interface.
 
@@ -131,8 +132,24 @@ into a `SceneDescription` (pins sit `PIN_MESH_OFFSET_Y` along their own up axis,
 aiming or charging). `follow_camera` ports the C++ camera rig: home behind the foul line, follows the
 rolling ball, eases back, and lets the window sleep once it is home. `view3d` keeps the renderer in
 egui-wgpu's callback resources and draws it from a paint callback in the central panel. `cli` parses
-`--theme`, `--mute` (reserved) and `--debug-view` with clap and collects the startup warnings, which
+`--theme`, `--mute` and `--debug-view` with clap and collects the startup warnings, which
 `main` prints once. The window keeps eframe's defaults (no multisampling, no depth buffer).
+
+## Audio
+
+`bowlingbox-audio` embeds the 13 WAV files of the C++ game (`crates/audio/sounds/`, provenance in
+`SOURCES.md`) and describes them in a catalogue (`SoundId`, loop flag). `AudioOutput` is the seam:
+`play`, `set_loop` for the three loop slots (roll, charge, ambient), mute and master volume.
+`KiraOutput` plays through the default device; `SilentOutput` plays nothing. `open_output()` gives
+the kira output, or the silent one plus the text `sound disabled: <reason>` when no device opens;
+`main` prints that text once to stderr.
+
+In the app, `sound_director` turns lane snapshots, the score sheet and the physics impacts into cues
+(pure logic, tested with a recording output). `sound_settings` holds mute, volume and ambience;
+`theme_sounds` maps a theme to its ambience; `sound_control` joins them: it applies sound commands to
+the output, steps the lane for a frame, drains the lane's impacts every frame (also while muted, so
+no backlog builds up) and hands them to the director with the summed step time. The window owns the
+output and shows `volume NN %` or `sound muted` in the status bar.
 
 ## Dependencies
 
@@ -146,8 +163,11 @@ egui-wgpu's callback resources and draws it from a paint callback in the central
   About window show.
 - `bowlingbox-render` depends on `glam`, `bytemuck` and `wgpu`. The workspace pins `wgpu` to the
   version eframe's `egui-wgpu` uses, so the tree has one wgpu.
-- `bowlingbox-lane` depends on `bowlingbox-score` and `rapier3d`. `render` and `audio` will depend on
+- `bowlingbox-lane` depends on `bowlingbox-score` and `rapier3d`. `render` and `audio` depend on
   neither `lane` nor each other.
+- `bowlingbox-audio` depends on `kira` (cpal backend only) and `hound`, and on none of our crates. On
+  Linux, cpal needs the ALSA headers at build time (`libasound2-dev`) and the ALSA runtime library at
+  run time, which desktop Linux systems have.
 - The dev profile builds `rapier3d` and `parry3d` with `opt-level = 3`, so a debug build simulates in
   real time.
 

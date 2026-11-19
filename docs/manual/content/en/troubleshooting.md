@@ -18,6 +18,10 @@ Bowlingbox uses a simpler picture when your graphics card cannot draw the full o
 
 To check whether the simpler picture fixes a problem, start the program with `BOWLINGBOX_RENDER=basic bowlingbox`. `BOWLINGBOX_RENDER=full`, or no value, uses the full picture where your graphics card supports it.
 
+## There is no sound
+
+Start the program from a terminal. If one line starts with `sound disabled:`, the game could not open a sound device and runs without sound. Check that your system has a working audio output (on Linux, a PulseAudio or PipeWire server, or ALSA) and start the program again. Check also that the sound is not muted (the bottom line shows `sound muted`; press M). On Linux, building from source needs the package `libasound2-dev`.
+
 ## The game runs slowly
 
 Start the program with `BOWLINGBOX_RENDER_STATS=1 bowlingbox` in a terminal. About once a second it prints how many milliseconds the graphics card spends on each part of the picture. Add that output when you report the problem. If your graphics card cannot measure this, the program says so once.

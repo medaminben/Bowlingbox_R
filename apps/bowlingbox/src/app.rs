@@ -1,6 +1,7 @@
 //! The window: menu, key and pointer input, the fixed-step clock, the 3D view and the debug view.
 //! The rules live in the `lane` and `score` crates.
 
+use bowlingbox_audio::AudioOutput;
 use bowlingbox_lane::{Lane, Phase, RapierWorld};
 use bowlingbox_render::{Camera, THEMES, ThemeId, next_theme, theme};
 use bowlingbox_score::ScoreCalculator;
@@ -10,6 +11,7 @@ use crate::command::{Command, CommandTarget, Route, route};
 use crate::fixed_step::{self, FixedStep};
 use crate::follow_camera::FollowCamera;
 use crate::input::{self, KeyLatch};
+use crate::sound_control::SoundControl;
 use crate::{debug_view, lane_commands, scene_adapter, view3d};
 
 const VERSION: &str = env!("BK_VERSION_FULL");
@@ -22,6 +24,8 @@ pub struct App {
     /// Draw the top-down physics view instead of the 3D view (`--debug-view`).
     debug_view: bool,
     latch: KeyLatch,
+    out: Box<dyn AudioOutput>,
+    sound: SoundControl,
     /// The lane drawing of the last frame, where pointer presses count.
     canvas: Option<egui::Rect>,
     show_about: bool,
@@ -30,7 +34,13 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(theme: ThemeId, debug_view: bool) -> Self {
+    pub fn new(
+        theme: ThemeId,
+        debug_view: bool,
+        muted: bool,
+        mut out: Box<dyn AudioOutput>,
+    ) -> Self {
+        let sound = SoundControl::new(out.as_mut(), muted, theme);
         Self {
             lane: Lane::default(),
             clock: FixedStep::default(),
@@ -38,6 +48,8 @@ impl App {
             theme,
             debug_view,
             latch: KeyLatch::default(),
+            out,
+            sound,
             canvas: None,
             show_about: false,
             idle: false,
@@ -48,12 +60,21 @@ impl App {
         match command.target() {
             // A command the phase does not allow changes nothing.
             CommandTarget::Lane => {
-                let _ = lane_commands::execute(command, &mut self.lane);
+                let done = lane_commands::execute(command, &mut self.lane).is_ok();
+                if done && command == Command::NewGame {
+                    self.sound.new_game(self.out.as_mut());
+                }
             }
             CommandTarget::App => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-            CommandTarget::View => self.theme = next_theme(self.theme),
-            // Sound arrives in a later milestone.
-            CommandTarget::Sound => {}
+            CommandTarget::View => self.set_theme(next_theme(self.theme)),
+            CommandTarget::Sound => self.sound.apply(self.out.as_mut(), command),
+        }
+    }
+
+    fn set_theme(&mut self, theme: ThemeId) {
+        if theme != self.theme {
+            self.theme = theme;
+            self.sound.theme_changed(self.out.as_mut(), theme);
         }
     }
 
@@ -148,10 +169,30 @@ impl App {
             });
             ui.menu_button("View", |ui| {
                 ui.menu_button("Theme", |ui| {
+                    let mut chosen = self.theme;
                     for id in THEMES {
-                        ui.radio_value(&mut self.theme, id, theme(id).label);
+                        ui.radio_value(&mut chosen, id, theme(id).label);
                     }
+                    self.set_theme(chosen);
                 });
+            });
+            ui.menu_button("Sound", |ui| {
+                let settings = self.sound.settings();
+                if ui.checkbox(&mut { settings.muted }, "Mute").clicked() {
+                    self.run(ui.ctx(), Command::ToggleMute);
+                }
+                if ui.button("Volume up").clicked() {
+                    self.run(ui.ctx(), Command::VolumeUp);
+                }
+                if ui.button("Volume down").clicked() {
+                    self.run(ui.ctx(), Command::VolumeDown);
+                }
+                if ui
+                    .checkbox(&mut { settings.ambience }, "Background ambience")
+                    .clicked()
+                {
+                    self.run(ui.ctx(), Command::ToggleAmbience);
+                }
             });
             ui.menu_button("Help", |ui| {
                 if ui.button("About").clicked() {
@@ -169,10 +210,10 @@ impl eframe::App for App {
         self.handle_input(&ctx);
 
         let elapsed = fixed_step::frame_time(self.idle, ctx.input(|i| i.unstable_dt));
-        for _ in 0..self.clock.advance(elapsed) {
-            self.lane.step(fixed_step::DT);
-        }
-        let snapshot = self.lane.snapshot();
+        let steps = self.clock.advance(elapsed);
+        let snapshot = self
+            .sound
+            .step_frame(self.out.as_mut(), &mut self.lane, steps);
         self.follow.update(&snapshot, elapsed);
         self.idle =
             matches!(snapshot.phase, Phase::Aiming | Phase::GameOver) && self.follow.is_home();
@@ -183,7 +224,11 @@ impl eframe::App for App {
         egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
         egui::Panel::bottom("status").show(ui, |ui| {
             let status = debug_view::status(&snapshot, self.lane.score_sheet());
-            ui.label(format!("{status} | Theme {}", theme(self.theme).label));
+            ui.label(format!(
+                "{status} | Theme {} | {}",
+                theme(self.theme).label,
+                self.sound.status()
+            ));
         });
         egui::CentralPanel::default().show(ui, |ui| {
             debug_view::scoreboard(ui, self.lane.score_sheet());
