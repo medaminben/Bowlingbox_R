@@ -1,53 +1,87 @@
 # Bowlingbox
 
+[![CI](https://github.com/medaminben/Bowlingbox_R/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/medaminben/Bowlingbox_R/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/medaminben/Bowlingbox_R)](https://github.com/medaminben/Bowlingbox_R/releases/latest)
+[![downloads](https://img.shields.io/github/downloads/medaminben/Bowlingbox_R/total)](https://github.com/medaminben/Bowlingbox_R/releases)
+[![manual](https://img.shields.io/badge/manual-online-2E7D32)](https://medaminben.github.io/Bowlingbox_R/)
+![Rust 1.100](https://img.shields.io/badge/Rust-1.100-B7410E)
+![egui 0.37](https://img.shields.io/badge/egui-0.37-3E7BCE)
+![wgpu 30](https://img.shields.io/badge/wgpu-30-5B4E96)
+![Rapier 0.36](https://img.shields.io/badge/Rapier-0.36-E07A2B)
+![platform: Windows | Linux](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-555)
+[![license: MIT](https://img.shields.io/github/license/medaminben/Bowlingbox_R)](LICENSE)
+
+![Bowlingbox](docs/images/splash.png)
+
+Bowlingbox is a 3D ten-pin bowling game for Windows and Linux. You aim the ball, hold a key to charge
+the throw and let go; a physics engine decides which pins fall. This is version 2, rewritten in Rust. Version 1 was
+[Bowlingbox 1.5.5](https://github.com/medaminben/Bowlingbox), written in C++.
+
+## Download
+
+Get the installer for your system from the [latest release](https://github.com/medaminben/Bowlingbox_R/releases/latest):
+
+| System | File |
+| --- | --- |
+| Windows | `Bowlingbox_Setup_<version>.exe` |
+| Debian, Ubuntu | `bowlingbox_<version>_amd64.deb` |
+| Other Linux | `Bowlingbox-<version>-x86_64.AppImage` |
+
+If you have Bowlingbox 1.5.5 installed, uninstall it first.
+
+## The game
+
 ![Bowlingbox in the Neon Hall theme](docs/manual/assets/shots/en/game.png)
 
-Bowlingbox is a 3D ten-pin bowling game rebuilt in Rust. It follows up
-[Bowlingbox 1.5.5](https://github.com/medaminben/Bowlingbox), the C++ version. The work is in progress
-until v2.0.0.
+- A 3D lane with a camera that follows the ball, in three themes: Neon Hall, Classic Alley and Outdoor.
+  Shadows, lane reflection and bloom are on where the graphics card supports them.
+- A full ten-frame game with the standard scoring, a scoreboard and a power bar.
+- Sounds for the rolling ball, the pins, strikes and spares, and a background ambience for each
+  theme. Mute, volume and ambience are remembered between runs.
 
-What the game has:
+## Controls
 
-- A 3D lane with a following camera, in three themes (Neon Hall, Classic Alley and Outdoor), with shadows,
-  lane reflection and bloom where the GPU supports them.
-- A scoreboard, power bar, hint and throw result around the 3D view, a menu bar (Game, View, Sound, Help)
-  and the Controls and About windows. Everything scales with the window.
-- Physics on Rapier and a full ten-frame game with the standard scoring.
-- Sound: rolling, pin knocks, strike and spare cues and an ambience for each theme. Mute, volume and
-  ambience are remembered between runs.
-- `--theme`, `--mute`, `--debug-view` and `--screen` on the command line.
+| Action | Keyboard | Mouse |
+| --- | --- | --- |
+| Move the ball | Left, Right | Move over the lane |
+| Turn the aim | A, D | Drag with the right button |
+| Throw | Hold Space, release to throw | Hold the left button, release to throw |
+| New game | N, Ctrl+N | Game menu |
+| Change the theme | T | View menu |
+| Mute, volume | M, + and - | Sound menu |
+| Background ambience | B | Sound menu |
+| Quit | Esc, Ctrl+Q | Game menu |
 
-The acceptance checklist for v2.0.0 and where each item stands is in
-[docs/ACCEPTANCE.md](docs/ACCEPTANCE.md).
+The [user manual](https://medaminben.github.io/Bowlingbox_R/) explains the game, the scoring, the
+settings and what to do when something goes wrong.
 
-## Build and run
+## Build from source
+
+You need Rust (the version in `rust-toolchain.toml` is installed by `rustup` on the first build). On
+Linux you also need the ALSA headers: `sudo apt install libasound2-dev`.
 
 ```
-cargo build
+cargo run --release -p bowlingbox
 cargo test
-cargo run -p bowlingbox
 ```
 
-`cargo run -p bowlingbox -- --version` prints the version and exits. `--theme=neon|classic|outdoor` picks
-the look at start (any letter case; an unknown name prints a warning and gives Neon Hall). `--debug-view`
-draws the top-down physics view instead of the 3D view. `--mute` starts without sound (this session only). Sound settings are remembered between runs.
-`--screen=<name>` opens a named screen for screenshots (see the manual).
-The 3D view uses the full render path (shadows, lane reflection,
-bloom) where the GPU supports it and the basic path otherwise; stderr then gets one `render: ...` line with the
-reason. `BOWLINGBOX_RENDER=basic` forces the basic path, `full` or no value picks the full path where supported,
-and any other value prints a warning. `BOWLINGBOX_RENDER_STATS=1` prints the GPU time of each pass about once a
-second. In the window, Esc and Ctrl+Q quit. With the Controls or About window open, Esc closes it first and the game keys do
-nothing; Ctrl+Q still quits. With a menu open, Esc closes the menu and Ctrl+Q does nothing.
+Command-line options:
 
-Controls: Left and Right move the ball, A and D turn the aim, hold Space to charge the throw and release it to
-throw, N starts a new game. With the mouse, move it over the lane to shift the ball, drag with the right button
-to turn the aim, and hold the left button to charge and release to throw. T changes the theme. M mutes, + and - change the volume
-(the keypad keys too), and B switches the background ambience; the Sound menu does the same. On Linux the build needs the ALSA headers (`libasound2-dev`). If no sound device opens, stderr gets one `sound disabled: ...` line and the game runs silent.
+| Option | What it does |
+| --- | --- |
+| `--theme=neon\|classic\|outdoor` | Starts with this theme |
+| `--mute` | Starts without sound, for this session only |
+| `--debug-view` | Draws the top-down physics view instead of the 3D view |
+| `--screen=<name>` | Opens a named screen, for the manual's screenshots |
+| `--version` | Prints the version |
 
-The menu and the HUD use the Rubik font (SIL Open Font License); its licence is in
-[`packaging/NOTICES-extra.txt`](packaging/NOTICES-extra.txt).
+Two environment variables help with graphics problems. `BOWLINGBOX_RENDER=basic` turns off shadows,
+reflection and bloom. `BOWLINGBOX_RENDER_STATS=1` prints the GPU time of each render pass about once a
+second. When the game falls back to the basic look or runs without sound, it prints one line on the
+error output that says why.
 
-`cargo bk version` prints the product version. `cargo bk` lists the other commands.
+`cargo bk` lists the build commands of [buildkit-rust](https://github.com/medaminben/buildkit-rust),
+which this project uses for versions, the manual and the installers.
 
 ## Layout
 
@@ -64,6 +98,13 @@ The menu and the HUD use the Rubik font (SIL Open Font License); its licence is 
 
 ## Documentation
 
-- [Architecture](docs/ARCHITECTURE.md): how the crates and apps fit together.
-- [Acceptance checklist](docs/ACCEPTANCE.md): the bar for v2.0.0 and its status.
-- [User manual](docs/manual/content/en/index.md): the pages that ship with the app.
+- [User manual](https://medaminben.github.io/Bowlingbox_R/), also in
+  [docs/manual](docs/manual/content/en/index.md) as Markdown.
+- [Architecture](docs/ARCHITECTURE.md): how the game is built, for contributors.
+- [Acceptance checklist](docs/ACCEPTANCE.md): what was tested for v2.0.0.
+- [Changelog](CHANGELOG.md).
+
+## License
+
+MIT, see [LICENSE](LICENSE). The menu and HUD font is Rubik (SIL Open Font License); its licence is in
+[packaging/NOTICES-extra.txt](packaging/NOTICES-extra.txt).
