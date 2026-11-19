@@ -45,13 +45,24 @@ impl Capabilities {
             }
         };
         Self {
-            hdr_msaa_samples: hdr_samples(
-                format_features(HDR_FORMAT),
-                format_features(DEPTH_FORMAT),
+            hdr_msaa_samples: on_backend(
+                adapter.get_info().backend,
+                hdr_samples(format_features(HDR_FORMAT), format_features(DEPTH_FORMAT)),
             ),
             max_texture_2d: device.limits().max_texture_dimension_2d,
             timestamp_query: features.contains(wgpu::Features::TIMESTAMP_QUERY),
         }
+    }
+}
+
+/// `samples` limited to what `backend` can draw: wgpu-hal 30's GL backend creates a multisampled
+/// texture that is also sampled with the `GL_TEXTURE_2D` target, which fails, and the HDR pass then
+/// draws nothing. On GL the pass therefore has one sample.
+fn on_backend(backend: wgpu::Backend, samples: u32) -> u32 {
+    if backend == wgpu::Backend::Gl {
+        samples.min(1)
+    } else {
+        samples
     }
 }
 
@@ -156,6 +167,13 @@ mod tests {
             hdr_samples(colour, features(SAMPLED_TARGET, Flags::empty())),
             1
         );
+    }
+
+    #[test]
+    fn the_gl_backend_draws_the_hdr_pass_with_one_sample() {
+        assert_eq!(on_backend(wgpu::Backend::Gl, 4), 1);
+        assert_eq!(on_backend(wgpu::Backend::Gl, 0), 0);
+        assert_eq!(on_backend(wgpu::Backend::Vulkan, 4), 4);
     }
 
     #[test]

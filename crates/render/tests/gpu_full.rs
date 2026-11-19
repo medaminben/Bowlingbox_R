@@ -391,7 +391,7 @@ fn one_and_two_sample_main_passes_draw_the_lane_and_sky() {
         return;
     };
     for samples in [1, 2] {
-        if samples == 2 && !two_samples_supported(&gpu) {
+        if samples > gpu.caps.hdr_msaa_samples || (samples == 2 && !two_samples_supported(&gpu)) {
             println!("note: no {samples}x MSAA for the HDR targets; skipping that count");
             continue;
         }
