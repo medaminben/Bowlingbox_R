@@ -62,9 +62,16 @@ pub fn route(command: Command, dialog_open: bool, menu_open: bool) -> Route {
         Command::Escape if dialog_open => Route::CloseDialog,
         Command::Escape | Command::Quit if menu_open => Route::Ignore,
         Command::Escape => Route::Run(Command::Quit),
+        Command::Release => Route::Run(Command::Release),
         other if dialog_open && other.target() != CommandTarget::App => Route::Ignore,
         other => Route::Run(other),
     }
+}
+
+/// Whether a menu click on `command` acts. A click is an explicit choice, so it skips `route`
+/// (the menu is still open in that frame); only a dialog blocks the game items. Quit always acts.
+pub fn menu_click_allowed(command: Command, dialog_open: bool) -> bool {
+    !dialog_open || command.target() == CommandTarget::App || command == Command::Release
 }
 
 #[cfg(test)]
@@ -95,18 +102,16 @@ mod tests {
         assert_eq!(Command::Escape.target(), CommandTarget::App);
     }
 
-    const GAME: [Command; 11] = [
+    const GAME: [Command; 9] = [
         Command::MoveAim(0.1),
         Command::RotateAim(1.0),
         Command::StartCharge,
-        Command::Release,
         Command::NewGame,
         Command::CycleTheme,
         Command::ToggleMute,
         Command::VolumeUp,
         Command::VolumeDown,
         Command::ToggleAmbience,
-        Command::MoveAim(-0.1),
     ];
 
     #[test]
@@ -124,6 +129,35 @@ mod tests {
     fn no_game_command_reaches_the_lane_behind_a_dialog() {
         for command in GAME {
             assert_eq!(route(command, true, false), Route::Ignore, "{command:?}");
+        }
+    }
+
+    #[test]
+    fn a_release_always_passes_so_a_throw_never_sticks_in_charging() {
+        assert_eq!(
+            route(Command::Release, true, false),
+            Route::Run(Command::Release)
+        );
+        assert_eq!(
+            route(Command::Release, true, true),
+            Route::Run(Command::Release)
+        );
+    }
+
+    #[test]
+    fn menu_clicks_bypass_the_popup_route() {
+        // The menu is still open in the click frame; Quit must act.
+        assert!(menu_click_allowed(Command::Quit, false));
+        assert!(menu_click_allowed(Command::Quit, true));
+        for command in GAME {
+            assert!(menu_click_allowed(command, false), "{command:?}");
+        }
+    }
+
+    #[test]
+    fn menu_clicks_on_game_items_do_nothing_behind_a_dialog() {
+        for command in GAME {
+            assert!(!menu_click_allowed(command, true), "{command:?}");
         }
     }
 

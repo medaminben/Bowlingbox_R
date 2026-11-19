@@ -7,7 +7,7 @@ use bowlingbox_render::{Camera, ThemeId, next_theme, theme};
 use bowlingbox_score::ScoreCalculator;
 use eframe::egui;
 
-use crate::command::{Command, CommandTarget, Route, route};
+use crate::command::{Command, CommandTarget, Route, menu_click_allowed, route};
 use crate::dialogs::{self, Dialog};
 use crate::fixed_step::{self, FixedStep};
 use crate::follow_camera::FollowCamera;
@@ -161,7 +161,11 @@ impl App {
 
     fn menu_bar(&mut self, ui: &mut egui::Ui) {
         match menus::show(ui, self.theme, self.sound.settings()) {
-            Some(MenuAction::Command(command)) => self.dispatch(ui.ctx(), command),
+            Some(MenuAction::Command(command)) => {
+                if menu_click_allowed(command, self.dialog.is_some()) {
+                    self.run(ui.ctx(), command);
+                }
+            }
             Some(MenuAction::Theme(id)) => self.dispatch_theme(id),
             Some(MenuAction::Controls) => self.dialog = Some(Dialog::Controls),
             Some(MenuAction::About) => self.dialog = Some(Dialog::About),
