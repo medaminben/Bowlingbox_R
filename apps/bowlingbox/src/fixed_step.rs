@@ -6,6 +6,15 @@ pub const DT: f32 = 1.0 / 60.0;
 /// After a stall, run this many steps and drop the rest instead of fast-forwarding.
 pub const MAX_STEPS: u32 = 5;
 
+/// Game time that passed since the last frame.
+///
+/// The window sleeps while the game waits for input, so the first frame after the wait reports
+/// the whole wait as `elapsed`. Nothing moved while idle, so that frame counts no time: a charge
+/// started on it begins at power 0.
+pub fn frame_time(was_idle: bool, elapsed: f32) -> f32 {
+    if was_idle { 0.0 } else { elapsed }
+}
+
 #[derive(Debug, Default)]
 pub struct FixedStep {
     pending: f32,
@@ -32,6 +41,13 @@ impl FixedStep {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_frame_after_an_idle_wait_counts_no_time() {
+        let mut clock = FixedStep::default();
+        assert_eq!(clock.advance(frame_time(true, 30.0)), 0);
+        assert_eq!(frame_time(false, 0.016), 0.016);
+    }
 
     #[test]
     fn half_steps_accumulate() {

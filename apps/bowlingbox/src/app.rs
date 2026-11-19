@@ -20,6 +20,8 @@ pub struct App {
     /// The lane drawing of the last frame, where pointer presses count.
     canvas: Option<egui::Rect>,
     show_about: bool,
+    /// The last frame asked for no repaint: the window slept until the next input.
+    idle: bool,
 }
 
 impl App {
@@ -139,12 +141,13 @@ impl eframe::App for App {
         let ctx = ui.ctx().clone();
         self.handle_input(&ctx);
 
-        let elapsed = ctx.input(|i| i.unstable_dt);
+        let elapsed = fixed_step::frame_time(self.idle, ctx.input(|i| i.unstable_dt));
         for _ in 0..self.clock.advance(elapsed) {
             self.lane.step(fixed_step::DT);
         }
         let snapshot = self.lane.snapshot();
-        if !matches!(snapshot.phase, Phase::Aiming | Phase::GameOver) {
+        self.idle = matches!(snapshot.phase, Phase::Aiming | Phase::GameOver);
+        if !self.idle {
             ctx.request_repaint();
         }
 
