@@ -3,10 +3,10 @@
 Bowlingbox keeps its rules in small crates that need no window, GPU or audio device, and a thin app that
 wires them to an egui window (eframe with the wgpu backend).
 
-Crates: `score` (the scoring rules), `lane` (the throw and the physics seam) and `render` (themes,
-decor, meshes, lighting maths, the camera and the wgpu scene renderer) exist now. `audio`
-(the sound catalogue and the output seam) exist now. `lane` uses `score`; `render` and `audio` use neither `lane` nor each other.
-Only the app converts between their types.
+Crates: `score` (the scoring rules), `lane` (the throw and the physics seam), `render` (themes,
+decor, meshes, lighting maths, the camera and the wgpu scene renderer) and `audio` (the sound
+catalogue and the output seam) exist now. `lane` uses `score`; `render` and `audio` use neither
+`lane` nor each other. Only the app converts between their types.
 
 ## Layout
 
@@ -166,7 +166,8 @@ output and shows `volume NN %` or `sound muted` in the status bar.
 - `bowlingbox-lane` depends on `bowlingbox-score` and `rapier3d`. `render` and `audio` depend on
   neither `lane` nor each other.
 - `bowlingbox-audio` depends on `kira` (cpal backend only) and `hound`, and on none of our crates. On
-  Linux, cpal needs the ALSA headers at build time (`libasound2-dev`) and `libasound2` at run time.
+  Linux, cpal needs the ALSA headers at build time (`libasound2-dev`) and the ALSA runtime library at
+  run time, which desktop Linux systems have.
 - The dev profile builds `rapier3d` and `parry3d` with `opt-level = 3`, so a debug build simulates in
   real time.
 
