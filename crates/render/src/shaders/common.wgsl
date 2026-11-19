@@ -17,6 +17,8 @@ struct Frame {
     point_color: array<vec4<f32>, 4>, // colour * intensity
     params: vec4<f32>,         // fog start, fog end, exposure, point light count
     lane: vec4<f32>,           // lane half width, board width, pin deck z, unused
+    light_vp: mat4x4<f32>,     // the key light's view projection (shadow map)
+    shadow: vec4<f32>,         // shadows 0/1 (full path only), unused
 }
 
 struct Draw {

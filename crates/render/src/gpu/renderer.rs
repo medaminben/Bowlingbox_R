@@ -10,7 +10,9 @@ use super::pipelines::{
 };
 use crate::camera::Camera;
 use crate::decor::{Prop, Shape, build_props};
-use crate::lighting::srgb_to_linear_vec3;
+use crate::lighting::{
+    LightFrustum, fit_light_frustum, props_in_box, shadow_box, srgb_to_linear_vec3,
+};
 use crate::scene::{SceneDescription, SceneGeometry};
 use crate::theme::{MAX_POINT_LIGHTS, Material, Pattern, Theme, ThemeId, theme};
 use glam::{Mat3, Mat4, Quat, Vec2, Vec3};
@@ -68,6 +70,10 @@ pub struct SceneRenderer {
     geometry: SceneGeometry,
     theme: &'static Theme,
     props: Vec<Prop>,
+    /// The key light's camera, fitted to the shadow box.
+    light: LightFrustum,
+    /// Indices into `props` that cast into the shadow map.
+    shadow_casters: Vec<usize>,
     meshes: Meshes,
     pipelines: Pipelines,
     scene_samples: u32,
@@ -77,6 +83,8 @@ pub struct SceneRenderer {
     draw_group: wgpu::BindGroup,
     draw_capacity: usize,
     draws: Vec<DrawItem>,
+    /// Index of the first prop in `draws`; everything before it casts a shadow.
+    prop_start: usize,
     opaque_count: usize,
     targets: Option<Targets>,
     /// The full path while it runs; `None` on the basic path.
@@ -138,8 +146,11 @@ impl SceneRenderer {
         let props = build_props(current, &geometry);
         let draw_capacity = props.len() + FIXED_DRAWS;
         let (draw_buffer, draw_group) = draw_buffers(device, &pipelines, draw_capacity);
+        let region = shadow_box(&geometry);
         Self {
             meshes: Meshes::new(device, &geometry),
+            light: fit_light_frustum(current.light_dir, &region),
+            shadow_casters: props_in_box(&props, &geometry, &region),
             geometry,
             theme: current,
             props,
@@ -151,6 +162,7 @@ impl SceneRenderer {
             draw_group,
             draw_capacity,
             draws: Vec::new(),
+            prop_start: 0,
             opaque_count: 0,
             targets: None,
             full,
@@ -192,6 +204,14 @@ impl SceneRenderer {
     pub fn set_theme(&mut self, id: ThemeId) {
         self.theme = theme(id);
         self.props = build_props(self.theme, &self.geometry);
+        let region = shadow_box(&self.geometry);
+        self.shadow_casters = props_in_box(&self.props, &self.geometry, &region);
+        self.light = fit_light_frustum(self.theme.light_dir, &region);
+    }
+
+    /// The full path runs and draws the shadow map this frame.
+    fn shadows(&self) -> bool {
+        self.full.is_some() && self.full_options.shadows
     }
 
     /// Draws the scene at `size_px` (the view's size in physical pixels) into the renderer's
@@ -365,6 +385,8 @@ impl SceneRenderer {
             g.head_pin_z - 0.3,
             0.0,
         ]);
+        out.extend_from_slice(&self.light.view_projection().to_cols_array());
+        out.extend_from_slice(&[f32::from(u8::from(self.shadows())), 0.0, 0.0, 0.0]);
         debug_assert_eq!(out.len(), FRAME_FLOATS);
         out
     }
@@ -444,6 +466,7 @@ impl SceneRenderer {
             t.ball,
             NO_BAND,
         ));
+        self.prop_start = self.draws.len();
         for prop in &self.props {
             self.draws.push(DrawItem::opaque(
                 MeshKind::Shape(prop.shape),
@@ -509,7 +532,12 @@ impl SceneRenderer {
 
     fn record(&self, encoder: &mut wgpu::CommandEncoder) {
         if let Some(full) = &self.full {
-            full.record(encoder, |pass| self.draw_scene(pass, full.scene()));
+            full.record(
+                encoder,
+                self.shadows(),
+                |pass, pipeline| self.draw_casters(pass, pipeline),
+                |pass| self.draw_scene(pass, full.scene()),
+            );
             return;
         }
         let Some(targets) = &self.targets else {
@@ -543,18 +571,29 @@ impl SceneRenderer {
         self.draw_scene(&mut pass, &self.pipelines.scene);
     }
 
+    /// What C++ `shadowPass` draws: lane, gutters, walls, pins and ball, then the props in the
+    /// shadow box.
+    fn draw_casters(&self, pass: &mut wgpu::RenderPass<'_>, pipeline: &wgpu::RenderPipeline) {
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &self.frame_group, &[]);
+        let props = self.shadow_casters.iter().map(|i| self.prop_start + i);
+        for i in (0..self.prop_start).chain(props) {
+            self.draw(pass, i);
+        }
+    }
+
+    fn draw(&self, pass: &mut wgpu::RenderPass<'_>, i: usize) {
+        let offset = u32::try_from(i as u64 * DRAW_STRIDE).expect("draw offset fits u32");
+        pass.set_bind_group(1, &self.draw_group, &[offset]);
+        self.meshes.get(self.draws[i].mesh).draw(pass);
+    }
+
     /// The opaque draws, the sky behind them, then the translucent aim guide.
     fn draw_scene(&self, pass: &mut wgpu::RenderPass<'_>, pipelines: &ScenePipelines) {
         pass.set_bind_group(0, &self.frame_group, &[]);
-        let offset =
-            |i: usize| u32::try_from(i as u64 * DRAW_STRIDE).expect("draw offset fits u32");
-        let draw = |pass: &mut wgpu::RenderPass<'_>, i: usize| {
-            pass.set_bind_group(1, &self.draw_group, &[offset(i)]);
-            self.meshes.get(self.draws[i].mesh).draw(pass);
-        };
         pass.set_pipeline(&pipelines.lit);
         for i in 0..self.opaque_count {
-            draw(pass, i);
+            self.draw(pass, i);
         }
         pass.set_pipeline(&pipelines.sky);
         pass.set_bind_group(1, &self.draw_group, &[0]);
@@ -562,7 +601,7 @@ impl SceneRenderer {
         if self.draws.len() > self.opaque_count {
             pass.set_pipeline(&pipelines.guide);
             for i in self.opaque_count..self.draws.len() {
-                draw(pass, i);
+                self.draw(pass, i);
             }
         }
     }

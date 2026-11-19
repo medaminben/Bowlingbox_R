@@ -8,9 +8,12 @@ use std::num::NonZeroU64;
 /// path wrote them to the default framebuffer.
 pub const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+/// The shadow map's depth. C++ uses `GL_DEPTH_COMPONENT24`; wgpu's 24-bit formats may be stored
+/// differently per backend, so the float format, guaranteed for depth comparison everywhere.
+pub const SHADOW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 /// Floats in the WGSL `Frame` struct (common.wgsl), in its field order.
-pub const FRAME_FLOATS: usize = 16 + 16 + 9 * 4 + 4 * 4 + 4 * 4 + 4 + 4;
+pub const FRAME_FLOATS: usize = 16 + 16 + 9 * 4 + 4 * 4 + 4 * 4 + 4 + 4 + 16 + 4;
 /// Floats in the WGSL `Draw` struct.
 pub const DRAW_FLOATS: usize = 16 + 16 + 3 * 4;
 /// Distance between draws in the dynamic-offset uniform buffer: the largest
@@ -139,6 +142,48 @@ fn scene_pipeline(
                 write_mask: wgpu::ColorWrites::ALL,
             })],
         }),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+/// The depth-only pass from the key light into the shadow map, through the frame and draw groups.
+pub fn shadow_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+) -> wgpu::RenderPipeline {
+    let module = shader(device, "shadow", include_str!("../shaders/shadow.wgsl"));
+    let attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("shadow"),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: &module,
+            entry_point: Some("vs_shadow"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers: &[Some(wgpu::VertexBufferLayout {
+                array_stride: VERTEX_STRIDE,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &attributes,
+            })],
+        },
+        // No culling, as in C++ (which never enables GL_CULL_FACE): both faces cast, whatever
+        // the light view's handedness does to the winding.
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: SHADOW_FORMAT,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Less),
+            stencil: wgpu::StencilState::default(),
+            // C++ glPolygonOffset(2, 4): factor 2 scales the slope, units 4 the constant.
+            bias: wgpu::DepthBiasState {
+                constant: 4,
+                slope_scale: 2.0,
+                clamp: 0.0,
+            },
+        }),
+        multisample: wgpu::MultisampleState::default(),
+        fragment: None,
         multiview_mask: None,
         cache: None,
     })

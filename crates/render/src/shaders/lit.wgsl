@@ -1,7 +1,7 @@
-// The C++ lit shader's basic path (Shaders.cpp kLitBody) without shadow and reflection sampling:
-// GGX key light, hemisphere ambient, up to four point lights, distance fog, emissive materials,
-// procedural wood and ball patterns. `fs_lit` (basic path) tone maps to sRGB here; `fs_lit_hdr`
-// (full path) writes linear HDR for the composite to tone map.
+// The C++ lit shader (Shaders.cpp kLitBody) without reflection sampling: GGX key light,
+// hemisphere ambient, up to four point lights, distance fog, emissive materials, procedural wood
+// and ball patterns. `fs_lit` (basic path) tone maps to sRGB here; `fs_lit_hdr` (full path) adds
+// the key light's shadow and writes linear HDR for the composite to tone map.
 
 const PI: f32 = 3.14159265;
 
@@ -135,8 +135,36 @@ fn brdf(n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, albedo: vec3<f32>, radiance: v
     return (diff + spec) * radiance * n_dot_l;
 }
 
-// Linear HDR colour, before the tone map.
-fn shade(in: MeshOut) -> vec3<f32> {
+// Full path only: the basic path's layout has no group 2.
+@group(2) @binding(0) var shadow_map: texture_depth_2d;
+@group(2) @binding(1) var shadow_sampler: sampler_comparison;  // less-equal, linear
+
+// How much of the key light reaches `world_pos`, 0..1 (C++ keyLightVisible).
+fn key_light_visible(n: vec3<f32>, world_pos: vec3<f32>) -> f32 {
+    if frame.shadow.x < 0.5 {
+        return 1.0;
+    }
+    let clip = frame.light_vp * vec4(world_pos, 1.0);
+    let ndc = clip.xyz / clip.w;
+    // Texture v runs down while NDC y runs up; depth is already 0..1.
+    let p = vec3(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5, ndc.z);
+    if any(p < vec3(0.0)) || any(p > vec3(1.0)) {
+        return 1.0;  // outside: lit
+    }
+    let bias = max(0.0025 * (1.0 - max(dot(n, -frame.light_dir.xyz), 0.0)), 0.0005);
+    // Each tap is a bilinear 2x2 compare (linear filtering), so four taps at +-0.5 texel cover
+    // the same 3x3-texel tent footprint as nine point taps. The Level variant needs no
+    // derivatives, so it may run outside uniform control flow.
+    let h = 0.5 / vec2<f32>(textureDimensions(shadow_map));
+    let z = p.z - bias;
+    return 0.25 * (textureSampleCompareLevel(shadow_map, shadow_sampler, p.xy + vec2(-h.x, -h.y), z)
+                 + textureSampleCompareLevel(shadow_map, shadow_sampler, p.xy + vec2(h.x, -h.y), z)
+                 + textureSampleCompareLevel(shadow_map, shadow_sampler, p.xy + vec2(-h.x, h.y), z)
+                 + textureSampleCompareLevel(shadow_map, shadow_sampler, p.xy + vec2(h.x, h.y), z));
+}
+
+// Linear HDR colour, before the tone map. `key_visible` scales the key light (1 without shadows).
+fn shade(in: MeshOut, key_visible: f32) -> vec3<f32> {
     let dpx = fwidth(in.world_pos.x);
     let in_band = in.local_pos.y >= draw.band.x && in.local_pos.y <= draw.band.y;
     var base = select(draw.color.rgb, frame.band_color.rgb, in_band);
@@ -157,7 +185,7 @@ fn shade(in: MeshOut) -> vec3<f32> {
         let n = normalize(in.normal);
         let v = normalize(frame.camera_pos.xyz - in.world_pos);
         rgb = mix(frame.ground_ambient.rgb, frame.sky_ambient.rgb, n.y * 0.5 + 0.5) * base;
-        rgb += brdf(n, v, -frame.light_dir.xyz, base, frame.key_color.rgb);
+        rgb += brdf(n, v, -frame.light_dir.xyz, base, frame.key_color.rgb) * key_visible;
         let count = i32(frame.params.w + 0.5);
         for (var i = 0; i < count; i++) {
             let to_light = frame.point_pos[i].xyz - in.world_pos;
@@ -186,10 +214,14 @@ fn shade(in: MeshOut) -> vec3<f32> {
 
 @fragment
 fn fs_lit(in: MeshOut) -> @location(0) vec4<f32> {
-    return vec4(to_display(shade(in), frame.params.z), draw.color.a);
+    return vec4(to_display(shade(in, 1.0), frame.params.z), draw.color.a);
 }
 
 @fragment
 fn fs_lit_hdr(in: MeshOut) -> @location(0) vec4<f32> {
-    return vec4(shade(in), draw.color.a);
+    var key_visible = 1.0;
+    if draw.band.z <= 0.5 {  // emissive surfaces ignore the key light
+        key_visible = key_light_visible(normalize(in.normal), in.world_pos);
+    }
+    return vec4(shade(in, key_visible), draw.color.a);
 }

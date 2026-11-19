@@ -2,14 +2,18 @@
 //! Without a GPU adapter, or on one that cannot run the full path, the tests print a note and pass.
 
 // Pixel rows and bytes are small; the casts between them and floats are exact.
-#![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 
 use bowlingbox_render::{
     Camera, Capabilities, FullPathOptions, RenderMode, SceneDescription, SceneGeometry,
     SceneRenderer, THEMES, ThemeId, Transform, choose_path, linear_to_srgb, srgb_to_linear_vec3,
     theme,
 };
-use glam::Vec3;
+use glam::{Vec3, Vec4Swizzles};
 
 const G: SceneGeometry = SceneGeometry {
     lane_half_width: 0.525,
@@ -320,6 +324,54 @@ fn a_ball_at_plus_x_lands_right_of_centre() {
         "ball pixels reach x = {min_x}, left of centre"
     );
     assert!(sum_x / count > W / 2);
+}
+
+/// The pixel that shows the world point `p`.
+fn pixel(camera: &Camera, p: Vec3) -> (u32, u32) {
+    let clip = camera.projection() * camera.view() * p.extend(1.0);
+    let ndc = clip.xy() / clip.w;
+    let x = (ndc.x * 0.5 + 0.5) * W as f32;
+    let y = (0.5 - ndc.y * 0.5) * H as f32;
+    assert!(
+        (0.0..W as f32).contains(&x) && (0.0..H as f32).contains(&y),
+        "{p} is off screen"
+    );
+    (x as u32, y as u32)
+}
+
+fn brightness(rgb: [i32; 3]) -> i32 {
+    rgb.iter().sum()
+}
+
+#[test]
+fn the_ball_shadows_the_lane_on_the_side_away_from_the_sun() {
+    let Some(gpu) = full_gpu() else { return };
+    let mut renderer = full_renderer(&gpu, 1, ThemeId::Outdoor);
+    // From the left, in front of the ball: Outdoor's sun shines towards -x and +z, so the shadow
+    // falls to the ball's left and lies in view.
+    let mut camera = Camera::default();
+    camera.look_at(Vec3::new(-1.0, 0.8, 0.0), Vec3::new(0.0, 0.0, 1.0));
+    camera.set_viewport(W, H);
+    let scene = ball_at(Vec3::new(0.0, G.ball_radius, 1.0));
+    renderer.set_full_path_options(FullPathOptions { shadows: false });
+    let lit = render(&gpu, &mut renderer, 1, &camera, &scene);
+    renderer.set_full_path_options(FullPathOptions::default());
+    let shadowed = render(&gpu, &mut renderer, 1, &camera, &scene);
+
+    // On the lane, inside the ball's shadow ellipse and not behind the ball.
+    let (x, y) = pixel(&camera, Vec3::new(-0.14, 0.0, 1.0));
+    let (with, without) = (shadowed.at(x, y), lit.at(x, y));
+    assert!(
+        brightness(with) + 60 < brightness(without),
+        "shadow side ({x}, {y}): {with:?} with shadows, {without:?} without"
+    );
+    // On the lane, away from every caster.
+    let (x, y) = pixel(&camera, Vec3::new(0.35, 0.0, 0.5));
+    let (with, without) = (shadowed.at(x, y), lit.at(x, y));
+    assert!(
+        close(with, without),
+        "open lane ({x}, {y}): {with:?} with shadows, {without:?} without"
+    );
 }
 
 #[test]

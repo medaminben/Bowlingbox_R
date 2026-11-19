@@ -7,6 +7,8 @@ use std::task::{Context, Poll, Waker};
 
 /// The full path's HDR colour format.
 pub const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+/// The shadow map's short side (1024x4096, as in C++).
+pub const SHADOW_MAP_WIDTH: u32 = 1024;
 /// The shadow map's long side (1024x4096, as in C++).
 pub const SHADOW_MAP_HEIGHT: u32 = 4096;
 
