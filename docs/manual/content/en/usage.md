@@ -1,23 +1,22 @@
 ---
-title: Using Bowlingbox
+title: Playing
 order: 2
-summary: Start the program and work with it.
+summary: Start the game.
 ---
 
-## Starting the program
+## Starting the game
 
 Start Bowlingbox from its entry in your applications menu, or run `bowlingbox` in a terminal.
 
-## Working with the program
+## Where the game stands
 
-Describe the main task here, one step per line:
+The game is in progress. The window opens with a menu bar, an empty central panel and a score line
+at the bottom. The lane, the ball and the pins arrive in a later version.
 
-1. Open the file or start the action.
-2. Choose the options you need.
-3. Check the result.
+- **Game, New Game** starts over.
+- **Game, Quit**, Esc and Ctrl+Q close the window. While the About window or a menu is open, Esc
+  and Ctrl+Q close that first.
+- **Help, About** shows the version.
 
-::: note
-Replace these steps with the real ones, and add a screenshot to the assets folder when a step needs one.
-:::
-
-If something does not work, see [Troubleshooting](troubleshooting.md).
+For how a game is scored, see [Scoring rules](scoring.md). If something does not work, see
+[Troubleshooting](troubleshooting.md).

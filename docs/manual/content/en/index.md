@@ -6,10 +6,11 @@ summary: What Bowlingbox is and where to find help.
 
 ## Bowlingbox
 
-Bowlingbox is a program you start from its icon or from a terminal. Write here, in one or two sentences, what you use it for.
+Bowlingbox is a 3D ten-pin bowling game. It is a work in progress until version 2.0.0.
 
-This manual has three pages:
+Pages:
 
 - [Welcome](index.md), this page.
-- [Using Bowlingbox](usage.md) explains how to start and use the program.
+- [Playing](usage.md) explains how to start the game.
+- [Scoring rules](scoring.md) explains how a game is scored.
 - [Troubleshooting](troubleshooting.md) lists problems and what to do about them.

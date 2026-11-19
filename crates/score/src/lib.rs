@@ -1,40 +1,19 @@
-//! The `score` crate of Bowlingbox.
+//! The ten-pin score calculator of Bowlingbox, a port of the C++ `Score` library.
+//!
+//! [`ScoreCalculator`] records balls and implements [`Game`] and [`ScoreSheet`]. Displays
+//! depend on [`ScoreSheet`] and use [`notation`] and [`frames_of`] to draw the sheet.
 
-use std::fmt;
+mod frames;
+mod game;
+mod slot;
 
-/// A greeting for one name.
-///
-/// ```
-/// use bowlingbox_score::Greeting;
-///
-/// assert_eq!(Greeting::new("Ada").to_string(), "Hello, Ada!");
-/// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Greeting {
-    name: String,
-}
+pub use frames::{FrameView, frames, frames_of};
+pub use game::{Game, RollError, ScoreCalculator, ScoreSheet};
+pub use slot::{Slot, notation, total_notation};
 
-impl Greeting {
-    #[must_use]
-    pub fn new(name: &str) -> Self {
-        Self {
-            name: name.to_string(),
-        }
-    }
-}
-
-impl fmt::Display for Greeting {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Hello, {}!", self.name)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn displays_the_name() {
-        assert_eq!(Greeting::new("world").to_string(), "Hello, world!");
-    }
-}
+/// Frames in a game.
+pub const FRAMES: usize = 10;
+/// Pins in a full rack.
+pub const PINS: u8 = 10;
+/// Roll slots of a score sheet: nine frames of two and three for the last frame.
+pub const ROLL_SLOTS: usize = 21;

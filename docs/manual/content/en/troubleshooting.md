@@ -1,6 +1,6 @@
 ---
 title: Troubleshooting
-order: 3
+order: 4
 summary: Problems you may meet and what to do about them.
 ---
 
@@ -14,6 +14,6 @@ Update your graphics driver and start the program again.
 
 ## Reporting a problem
 
-Send the version number, of the installer you used, together with the steps that led to the problem.
+Send the version number and the installer you used, together with the steps that led to the problem.
 
-Go back to [Using Bowlingbox](usage.md) or to the [Welcome](index.md) page.
+Go back to [Playing](usage.md) or to the [Welcome](index.md) page.
