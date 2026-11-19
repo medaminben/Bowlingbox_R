@@ -5,8 +5,8 @@
 use std::f32::consts::PI;
 
 use bowlingbox_lane::{
-    Body, Impact, LANE, Lane, MAX_AIM_ANGLE_DEG, MAX_AIM_OFFSET, POCKET_ANGLE_DEG, POCKET_OFFSET,
-    POCKET_POWER, Phase, RapierWorld, Snapshot,
+    Body, Impact, LANE, Lane, MAX_AIM_ANGLE_DEG, MAX_AIM_OFFSET, PIN_MESH_OFFSET_Y,
+    POCKET_ANGLE_DEG, POCKET_OFFSET, POCKET_POWER, Phase, PhysicsWorld, RapierWorld, Snapshot,
 };
 use bowlingbox_score::{ScoreCalculator, ScoreSheet, Slot};
 
@@ -106,6 +106,24 @@ fn second_ball_keeps_standing_pins() {
     assert_eq!(lane.score_sheet().pins_left(), 10 - down);
     // Fallen pins were removed.
     assert_eq!(s.pin_in_play, s.pin_standing);
+}
+
+#[test]
+fn a_fresh_rack_rests_on_the_deck() {
+    let mut world = RapierWorld::new();
+    let spawned: Vec<_> = (0..10).map(|i| world.pin_pose(i).position).collect();
+    for _ in 0..60 {
+        world.step(DT);
+    }
+    for (i, at) in spawned.iter().enumerate() {
+        let now = world.pin_pose(i).position;
+        assert!(
+            (now[1] - at[1]).abs() < 0.001,
+            "pin {i} dropped: {at:?} -> {now:?}"
+        );
+        let base = now[1] + PIN_MESH_OFFSET_Y - LANE.pin_origin_height;
+        assert!(base.abs() < 0.001, "pin {i} mesh base at {base} m");
+    }
 }
 
 #[test]

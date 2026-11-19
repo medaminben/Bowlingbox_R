@@ -19,8 +19,12 @@ The 3D view and the sound arrive in a later version.
 
 1. Move the ball with Left and Right and turn the aim with A and D.
 2. Hold Space. The power bar swings between empty and full.
-3. Release Space to throw. A throw at about 80 % power from just right of the centre usually strikes.
+3. Release Space to throw.
 4. Wait for the pins to settle. The next throw starts on its own, and the game ends after the tenth frame.
+
+For a strike, press Right three or four times from the centre, leave the aim straight and release at
+about 80 % power. Each press moves the ball 2 cm. One press of A or D usually costs the strike. The
+ball keeps its place and aim for the next throw; a new game puts it back in the centre.
 
 With the mouse, move it over the lane to shift the ball, drag with the right button to turn the aim,
 and hold the left button to charge and release it to throw.

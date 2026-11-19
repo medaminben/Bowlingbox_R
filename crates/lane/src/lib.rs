@@ -9,7 +9,9 @@ mod types;
 mod world;
 
 pub use lane::{Lane, LaneError};
-pub use rapier_world::{POCKET_ANGLE_DEG, POCKET_OFFSET, POCKET_POWER, RapierWorld};
+pub use rapier_world::{
+    PIN_MESH_OFFSET_Y, POCKET_ANGLE_DEG, POCKET_OFFSET, POCKET_POWER, RapierWorld,
+};
 pub use types::{
     BALL_START_Z, Body, Impact, LANE, LaneDimensions, MAX_AIM_ANGLE_DEG, MAX_AIM_OFFSET, Phase,
     Pose, Snapshot,

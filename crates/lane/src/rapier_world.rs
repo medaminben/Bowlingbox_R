@@ -16,9 +16,10 @@ use crate::types::{BALL_START_Z, Body, Impact, LANE, Pose};
 use crate::world::PhysicsWorld;
 
 /// Lateral ball offset in metres of a throw that usually strikes, with
-/// [`POCKET_ANGLE_DEG`] and [`POCKET_POWER`]. The middle of the offsets 0.040 to 0.065 m
-/// that strike at every power from 0.6 to 1.0.
-pub const POCKET_OFFSET: f32 = 0.05;
+/// [`POCKET_ANGLE_DEG`] and [`POCKET_POWER`]. The middle of the offsets 0.058 to 0.085 m
+/// that strike at every power from 0.7 to 1.0 (from 0.6 too, except near 0.07 m), with the
+/// pins spawned at rest on the deck.
+pub const POCKET_OFFSET: f32 = 0.075;
 /// Throw angle in degrees of a throw that usually strikes.
 pub const POCKET_ANGLE_DEG: f32 = 0.0;
 /// Throw power in `[0, 1]` of a throw that usually strikes.
@@ -42,9 +43,21 @@ const STANDING_COS: f32 = std::f32::consts::FRAC_1_SQRT_2;
 /// N·s; a resting pin pushes about 0.12 per sub-step.
 const IMPACT_THRESHOLD: f32 = 0.3;
 const MAX_IMPACTS: usize = 256;
-/// The rack bounces after spawning; those pin contacts are not a hit. Pin contacts count
-/// once the ball is this close to the head pin.
+/// The resting rack presses on the deck when the world starts stepping; those pin contacts
+/// are not a hit. Pin contacts count once the ball is this close to the head pin.
 const PIN_IMPACT_MIN_BALL_Z: f32 = LANE.head_pin_z - 2.0;
+/// The lower pin cylinder of C++: centre above the nominal pin base, and half height.
+const PIN_LOWER_CENTRE: f32 = 0.10;
+const PIN_LOWER_HALF_HEIGHT: f32 = 0.08;
+
+/// Metres to add to a pin's pose, along the pin's own up axis, to place the C++ pin mesh
+/// (which spans `-pin_origin_height` to `pin_height - pin_origin_height` around its origin).
+///
+/// The pin collider ends this far above the nominal base, so a pin resting on the deck has
+/// its origin at `pin_origin_height - PIN_MESH_OFFSET_Y`. The pins spawn there, at rest.
+pub const PIN_MESH_OFFSET_Y: f32 = PIN_LOWER_CENTRE - PIN_LOWER_HALF_HEIGHT;
+/// Height of a pin origin standing on the deck.
+const PIN_REST_Y: f32 = LANE.pin_origin_height - PIN_MESH_OFFSET_Y;
 /// Below this height the ball is in the pit.
 const PIT_BALL_Y: f32 = -0.3;
 
@@ -281,12 +294,12 @@ fn set_sleep_thresholds(body: &mut RigidBody) {
     activation.angular_threshold = SLEEP_ANGULAR;
 }
 
-/// Two stacked cylinders as in C++, origin `pin_origin_height` above the base.
+/// Two stacked cylinders as in C++, origin `pin_origin_height` above the nominal base.
 fn pin_collider() -> ColliderBuilder {
     let d = LANE;
-    let lower = SharedShape::cylinder(0.08, d.pin_max_radius);
+    let lower = SharedShape::cylinder(PIN_LOWER_HALF_HEIGHT, d.pin_max_radius);
     let upper = SharedShape::cylinder(0.09, 0.035);
-    let lower_y = 0.10 - d.pin_origin_height;
+    let lower_y = PIN_LOWER_CENTRE - d.pin_origin_height;
     let upper_y = 0.29 - d.pin_origin_height;
     let shape = SharedShape::compound(vec![
         (RPose::translation(0.0, lower_y, 0.0), lower),
@@ -394,7 +407,7 @@ impl RapierWorld {
         let pins = std::array::from_fn(|i| {
             let (x, z) = spots[i];
             let mut body = RigidBodyBuilder::dynamic()
-                .translation(Vector::new(x, d.pin_origin_height, z))
+                .translation(Vector::new(x, PIN_REST_Y, z))
                 .ccd_enabled(true)
                 .angular_damping(PIN_ANGULAR_DAMPING)
                 .build();
@@ -499,7 +512,7 @@ impl PhysicsWorld for RapierWorld {
         for (i, (x, z)) in spots.into_iter().enumerate() {
             self.engine.bodies[self.pins[i]].set_enabled(true);
             self.in_play[i] = true;
-            self.teleport(self.pins[i], Vector::new(x, LANE.pin_origin_height, z));
+            self.teleport(self.pins[i], Vector::new(x, PIN_REST_Y, z));
         }
     }
 
