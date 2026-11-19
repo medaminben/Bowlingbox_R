@@ -96,14 +96,16 @@ mod tests {
     use bowlingbox_lane::{Body, Impact, Pose};
     use bowlingbox_score::ScoreCalculator;
 
-    /// A world that records one ball-pin impact on every step.
+    /// A world that records one ball-pin impact on every step and rolls the ball down the lane.
     #[derive(Default)]
     struct ImpactWorld {
         pending: Vec<Impact>,
+        steps: u16,
     }
 
     impl PhysicsWorld for ImpactWorld {
         fn step(&mut self, _dt: f32) {
+            self.steps += 1;
             self.pending.push(Impact {
                 a: Body::Ball,
                 b: Body::Pin,
@@ -119,7 +121,10 @@ mod tests {
         }
         fn remove_pin(&mut self, _i: usize) {}
         fn ball_pose(&self) -> Pose {
-            Pose::default()
+            Pose {
+                position: [0.0, 0.1 * f32::from(self.steps), 0.0],
+                ..Pose::default()
+            }
         }
         fn pin_pose(&self, _i: usize) -> Pose {
             Pose::default()
@@ -196,6 +201,27 @@ mod tests {
             out.loop_sound(LoopSlot::Ambient),
             Some(SoundId::AmbientNeon)
         );
+    }
+
+    #[test]
+    fn muting_and_unmuting_keeps_the_ambience_and_roll_loops_running() {
+        let mut out = SilentOutput::default();
+        let mut control = SoundControl::new(&mut out, false, ThemeId::NeonHall);
+        let mut lane = rolling_lane();
+        control.step_frame(&mut out, &mut lane, 2);
+        control.step_frame(&mut out, &mut lane, 2);
+        let roll = out.loop_state(LoopSlot::Roll);
+        assert!(roll.is_some(), "the roll loop should play");
+        assert!(out.loop_state(LoopSlot::Ambient).is_some());
+        assert_eq!(out.loop_starts(LoopSlot::Ambient), 1);
+
+        control.apply(&mut out, Command::ToggleMute);
+        assert!(out.muted());
+        control.apply(&mut out, Command::ToggleMute);
+
+        assert!(!out.muted());
+        assert_eq!(out.loop_starts(LoopSlot::Ambient), 1, "ambience restarted");
+        assert_eq!(out.loop_state(LoopSlot::Roll), roll);
     }
 
     #[test]
