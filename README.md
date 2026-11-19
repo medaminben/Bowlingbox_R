@@ -1,5 +1,7 @@
 # Bowlingbox
 
+![Bowlingbox in the Neon Hall theme](docs/manual/assets/shots/en/game.png)
+
 Bowlingbox is a 3D ten-pin bowling game rebuilt in Rust. It follows up
 [Bowlingbox 1.5.5](https://github.com/medaminben/Bowlingbox), the C++ version. The work is in progress
 until v2.0.0.

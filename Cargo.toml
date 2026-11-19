@@ -17,6 +17,7 @@ repo = "medaminben/Bowlingbox_R"
 # `cargo bk manual capture` appends --screen=<name> and --capture=<absolute path>.
 [workspace.metadata.buildkit.capture]
 command = ["cargo", "run", "--release", "--locked", "-p", "bowlingbox", "--"]
+build = ["cargo", "build", "--release", "--locked", "-p", "bowlingbox"]
 
 [workspace.metadata.bk.package]
 display-name = "Bowlingbox"
