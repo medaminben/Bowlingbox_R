@@ -21,12 +21,16 @@ pub const DRAW_FLOATS: usize = 16 + 16 + 4 * 4;
 pub const DRAW_STRIDE: u64 = 256;
 
 pub const TONEMAP: &str = include_str!("../shaders/tonemap.wgsl");
+/// The full path's weighted samples (weight.wgsl).
+pub const WEIGHT: &str = include_str!("../shaders/weight.wgsl");
 const COMMON: &str = include_str!("../shaders/common.wgsl");
 
 fn shader(device: &wgpu::Device, label: &str, body: &str) -> wgpu::ShaderModule {
     device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(label),
-        source: wgpu::ShaderSource::Wgsl(Cow::Owned(format!("{TONEMAP}\n{COMMON}\n{body}"))),
+        source: wgpu::ShaderSource::Wgsl(Cow::Owned(format!(
+            "{TONEMAP}\n{WEIGHT}\n{COMMON}\n{body}"
+        ))),
     })
 }
 
@@ -64,6 +68,9 @@ pub struct Pipelines {
 
 /// The pipelines that draw the scene's geometry and sky into one colour format.
 pub struct ScenePipelines {
+    /// Depth only: the opaque draws' depth before `lit` shades the nearest fragment of each
+    /// sample once.
+    pub depth: wgpu::RenderPipeline,
     pub lit: wgpu::RenderPipeline,
     pub sky: wgpu::RenderPipeline,
     pub guide: wgpu::RenderPipeline,
@@ -92,6 +99,8 @@ struct ScenePass<'a> {
     depth_write: bool,
     depth_compare: wgpu::CompareFunction,
     blend: Option<wgpu::BlendState>,
+    /// The colour target masked off: the pipeline writes depth alone.
+    depth_only: bool,
 }
 
 fn scene_pipeline(
@@ -106,6 +115,15 @@ fn scene_pipeline(
         array_stride: VERTEX_STRIDE,
         step_mode: wgpu::VertexStepMode::Vertex,
         attributes: &attributes,
+    })];
+    let targets = [Some(wgpu::ColorTargetState {
+        format,
+        blend: p.blend,
+        write_mask: if p.depth_only {
+            wgpu::ColorWrites::empty()
+        } else {
+            wgpu::ColorWrites::ALL
+        },
     })];
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(p.label),
@@ -138,11 +156,7 @@ fn scene_pipeline(
             module: p.module,
             entry_point: Some(p.fragment),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format,
-                blend: p.blend,
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
+            targets: &targets,
         }),
         multiview_mask: None,
         cache: None,
@@ -216,6 +230,7 @@ pub fn mirror_pipeline(
             depth_write: true,
             depth_compare: wgpu::CompareFunction::Less,
             blend: None,
+            depth_only: false,
         },
     )
 }
@@ -298,19 +313,30 @@ impl ScenePipelines {
         let sky = shader(device, "sky", include_str!("../shaders/sky.wgsl"));
         let guide = shader(device, "guide", include_str!("../shaders/guide.wgsl"));
         let build = |p: &ScenePass<'_>| scene_pipeline(device, layout, format, samples, p);
+        let lit_pass = ScenePass {
+            label: "lit",
+            module: &lit,
+            vertex: "vs_mesh",
+            fragment: &format!("fs_lit{hdr}"),
+            meshes: true,
+            front_face: wgpu::FrontFace::Cw,
+            cull: Some(wgpu::Face::Back),
+            depth_write: false,
+            // The depth pass left the nearest depth; `vs_mesh`'s invariant position matches it.
+            depth_compare: wgpu::CompareFunction::Equal,
+            blend: None,
+            depth_only: false,
+        };
         Self {
-            lit: build(&ScenePass {
-                label: "lit",
-                module: &lit,
-                vertex: "vs_mesh",
-                fragment: &format!("fs_lit{hdr}"),
-                meshes: true,
-                front_face: wgpu::FrontFace::Cw,
-                cull: Some(wgpu::Face::Back),
+            depth: build(&ScenePass {
+                label: "depth",
+                fragment: "fs_depth",
                 depth_write: true,
                 depth_compare: wgpu::CompareFunction::Less,
-                blend: None,
+                depth_only: true,
+                ..lit_pass
             }),
+            lit: build(&lit_pass),
             sky: build(&ScenePass {
                 label: "sky",
                 module: &sky,
@@ -322,6 +348,7 @@ impl ScenePipelines {
                 depth_write: false,
                 depth_compare: wgpu::CompareFunction::LessEqual,
                 blend: None,
+                depth_only: false,
             }),
             // No culling, as in C++: the thin box's far faces blend in too.
             guide: build(&ScenePass {
@@ -335,6 +362,7 @@ impl ScenePipelines {
                 depth_write: false,
                 depth_compare: wgpu::CompareFunction::Less,
                 blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                depth_only: false,
             }),
         }
     }

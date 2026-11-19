@@ -3,7 +3,7 @@
 use crate::geometry::{MeshData, box_data, cone_data, cylinder_data, pin_data};
 use crate::scene::{SceneGeometry, Transform};
 use crate::theme::{Material, Pattern, Theme};
-use glam::{Vec2, Vec3};
+use glam::{Mat4, Vec2, Vec3};
 
 // Layout constants, metres.
 /// Between the gutters of adjacent lanes.
@@ -64,6 +64,34 @@ pub struct Prop {
 pub struct Aabb {
     pub min: Vec3,
     pub max: Vec3,
+}
+
+impl Aabb {
+    /// The axis-aligned box around this box's eight corners through `m`.
+    #[must_use]
+    pub fn transformed(&self, m: Mat4) -> Self {
+        let mut out = Self {
+            min: Vec3::splat(f32::MAX),
+            max: Vec3::splat(f32::MIN),
+        };
+        for i in 0..8 {
+            let corner = Vec3::new(
+                if i & 1 != 0 { self.max.x } else { self.min.x },
+                if i & 2 != 0 { self.max.y } else { self.min.y },
+                if i & 4 != 0 { self.max.z } else { self.min.z },
+            );
+            let w = m.transform_point3(corner);
+            out.min = out.min.min(w);
+            out.max = out.max.max(w);
+        }
+        out
+    }
+
+    /// Distance from `p` to the nearest point of the box; 0 inside it.
+    #[must_use]
+    pub fn distance_to(&self, p: Vec3) -> f32 {
+        (self.min - p).max(p - self.max).max(Vec3::ZERO).length()
+    }
 }
 
 /// A shape centred at `centre`, `size` metres across (unit shapes are 1 m).
@@ -471,21 +499,5 @@ pub fn local_bounds(shape: Shape, g: &SceneGeometry) -> Aabb {
 /// The world box: `local_bounds`' eight corners through `transform.matrix()`.
 #[must_use]
 pub fn bounds(prop: &Prop, g: &SceneGeometry) -> Aabb {
-    let local = local_bounds(prop.shape, g);
-    let m = prop.transform.matrix();
-    let mut out = Aabb {
-        min: Vec3::splat(f32::MAX),
-        max: Vec3::splat(f32::MIN),
-    };
-    for i in 0..8 {
-        let corner = Vec3::new(
-            if i & 1 != 0 { local.max.x } else { local.min.x },
-            if i & 2 != 0 { local.max.y } else { local.min.y },
-            if i & 4 != 0 { local.max.z } else { local.min.z },
-        );
-        let w = m.transform_point3(corner);
-        out.min = out.min.min(w);
-        out.max = out.max.max(w);
-    }
-    out
+    local_bounds(prop.shape, g).transformed(prop.transform.matrix())
 }

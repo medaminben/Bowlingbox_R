@@ -1,7 +1,8 @@
 // The C++ lit shader (Shaders.cpp kLitBody): GGX key light, hemisphere ambient, up to four point
 // lights, distance fog, emissive materials, procedural wood and ball patterns. `fs_lit` (basic
 // path) tone maps to sRGB here; `fs_lit_hdr` (full path) adds the key light's shadow and the lane
-// reflection and writes linear HDR for the composite to tone map; `fs_lit_mirror` draws the
+// reflection and writes linear HDR, weighted for the resolve (weight.wgsl), for the composite to
+// tone map; `fs_lit_mirror` draws the
 // mirrored scene the lane reflects.
 
 const PI: f32 = 3.14159265;
@@ -237,6 +238,12 @@ fn reflect_lane(in: MeshOut, rgb: vec3<f32>) -> vec3<f32> {
     return rgb * (1.0 - k * r.a) + k * r.rgb;
 }
 
+// The depth pass: its colour target is masked off.
+@fragment
+fn fs_depth() -> @location(0) vec4<f32> {
+    return vec4(0.0);
+}
+
 @fragment
 fn fs_lit(in: MeshOut) -> @location(0) vec4<f32> {
     return vec4(to_display(fog(in, surface(in, 1.0)), frame.params.z), draw.color.a);
@@ -253,7 +260,7 @@ fn fs_lit_hdr(in: MeshOut) -> @location(0) vec4<f32> {
     if !emissive && frame.reflect.z > 0.5 && draw.flags.x > 0.5 {
         rgb = reflect_lane(in, rgb);
     }
-    return vec4(fog(in, rgb), draw.color.a);
+    return vec4(resolve_weight(fog(in, rgb)), draw.color.a);
 }
 
 // The scene mirrored in the lane plane (C++ reflectionPass): no shadows, no reflection, and the

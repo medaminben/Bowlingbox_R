@@ -413,6 +413,34 @@ fn one_and_two_sample_main_passes_draw_the_lane_and_sky() {
     }
 }
 
+/// The shader resolve, the fallback where the HDR format has no hardware resolve, gives the
+/// hardware resolve's frame: both average the main pass's weighted samples.
+#[test]
+fn the_shader_resolve_matches_the_hardware_resolve() {
+    let Some(gpu) = full_gpu() else { return };
+    if gpu.caps.hdr_msaa_samples < 2 || !gpu.caps.hdr_resolve {
+        println!("note: no multisampled HDR target with a hardware resolve; skipping");
+        return;
+    }
+    let without_resolve = Capabilities {
+        hdr_resolve: false,
+        ..gpu.caps
+    };
+    let camera = lane_camera();
+    for id in THEMES {
+        let [hardware, shaded] = [gpu.caps, without_resolve].map(|caps| {
+            let mut renderer = full_renderer_with(&gpu, &caps, 1, id);
+            render(&gpu, &mut renderer, 1, &camera, &racked_pins())
+        });
+        for y in 0..H {
+            for x in 0..W {
+                let (a, b) = (hardware.at(x, y), shaded.at(x, y));
+                assert!(close(a, b), "{id:?} at ({x}, {y}): {a:?} vs {b:?}");
+            }
+        }
+    }
+}
+
 #[test]
 fn a_ball_at_plus_x_lands_right_of_centre() {
     let Some(gpu) = full_gpu() else { return };
