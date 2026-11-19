@@ -8,11 +8,14 @@ rust-version.workspace = true
 [dependencies]
 bowlingbox-score = { path = "../../crates/score" }
 bowlingbox-lane = { path = "../../crates/lane" }
+bowlingbox-render = { path = "../../crates/render" }
+glam = "0.34.3"
 eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts", "wayland", "x11", "accesskit"] }
 
 # eframe trims winit's default features; this one brings back client-side window decorations
 # (sctk-adwaita), so GNOME on Wayland draws a title bar.
 winit = { version = "0.30", default-features = false, features = ["wayland-csd-adwaita"] }
+clap = { version = "4.6.8", features = ["derive", "std", "help", "usage", "error-context"] }
 
 [build-dependencies]
 buildkit.workspace = true

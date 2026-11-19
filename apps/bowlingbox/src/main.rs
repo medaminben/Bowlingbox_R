@@ -1,16 +1,22 @@
 mod app;
+mod cli;
 mod command;
 mod debug_view;
 mod fixed_step;
+mod follow_camera;
 mod input;
 mod lane_commands;
+mod scene_adapter;
+mod view3d;
 
+use clap::Parser;
 use eframe::egui;
 
 fn main() -> eframe::Result {
-    if std::env::args().any(|arg| arg == "--version") {
-        println!("bowlingbox {}", env!("BK_VERSION_FULL"));
-        return Ok(());
+    let cli = cli::Cli::parse();
+    let startup = cli.startup(std::env::var("BOWLINGBOX_RENDER").ok().as_deref());
+    for warning in &startup.warnings {
+        eprintln!("{warning}");
     }
     let title = "Bowlingbox";
     let options = eframe::NativeOptions {
@@ -25,6 +31,13 @@ fn main() -> eframe::Result {
     eframe::run_native(
         title,
         options,
-        Box::new(|_cc| Ok(Box::new(app::App::default()))),
+        Box::new(move |cc| {
+            let render_state = cc
+                .wgpu_render_state
+                .as_ref()
+                .ok_or("the window has no wgpu render state")?;
+            view3d::install(render_state, startup.theme);
+            Ok(Box::new(app::App::new(startup.theme, startup.debug_view)))
+        }),
     )
 }

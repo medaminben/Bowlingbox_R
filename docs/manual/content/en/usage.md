@@ -10,10 +10,18 @@ Start Bowlingbox from its entry in your applications menu, or run `bowlingbox` i
 
 ## Where the game stands
 
-The window shows the lane from above: the ball, the pins (standing pins filled, fallen pins that are
-still on the deck outlined) and an orange line for your aim. Above it are the scoreboard with ten frames
-and a power bar. The bottom line shows the phase of the throw, your score and the pins of the last throw.
-The 3D view and the sound arrive in a later version.
+The window shows the lane in 3D from behind the foul line, with a cyan guide for your aim. The camera
+follows the ball down the lane and returns when the throw is over. Above the lane are the scoreboard with
+ten frames and a power bar. The bottom line shows the phase of the throw, your score, the pins of the last
+throw and the theme. The sound arrives in a later version.
+
+## Themes
+
+Three looks are built in: Neon Hall (the default), Classic Alley and Outdoor. Press T to switch to the
+next one, or pick one under **View, Theme**. The theme changes only the look, never the game. To start in
+a theme, run `bowlingbox --theme=classic` (`neon`, `classic` or `outdoor`, in any letter case). An unknown
+name prints a warning in the terminal and starts Neon Hall. `bowlingbox --debug-view` shows the lane from
+above instead, which helps to check the physics.
 
 ## Throwing
 
@@ -35,15 +43,17 @@ and hold the left button to charge and release it to throw.
 | A, D | Turn the aim |
 | Space | Hold to charge, release to throw |
 | N | New game |
+| T | Next theme |
 | Esc, Ctrl+Q | Quit |
 
-T, M, B, + and - are reserved for the theme and the sound and do nothing yet.
+M, B, + and - are reserved for the sound and do nothing yet.
 
 ## Menus
 
 - **Game, New Game** starts over.
 - **Game, Quit** closes the window. So do Esc and Ctrl+Q. While the About window is open, either key
   closes it first. While a menu is open, Esc closes the menu and Ctrl+Q does nothing.
+- **View, Theme** picks the theme; the current one is marked.
 - **Help, About** shows the version.
 
 For how a game is scored, see [Scoring rules](scoring.md). If something does not work, see

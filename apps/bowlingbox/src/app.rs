@@ -1,21 +1,26 @@
-//! The window: menu, key and pointer input, the fixed-step clock and the debug view. The rules
-//! live in the `lane` and `score` crates.
+//! The window: menu, key and pointer input, the fixed-step clock, the 3D view and the debug view.
+//! The rules live in the `lane` and `score` crates.
 
 use bowlingbox_lane::{Lane, Phase, RapierWorld};
+use bowlingbox_render::{Camera, THEMES, ThemeId, next_theme, theme};
 use bowlingbox_score::ScoreCalculator;
 use eframe::egui;
 
 use crate::command::{Command, CommandTarget, Route, route};
 use crate::fixed_step::{self, FixedStep};
+use crate::follow_camera::FollowCamera;
 use crate::input::{self, KeyLatch};
-use crate::{debug_view, lane_commands};
+use crate::{debug_view, lane_commands, scene_adapter, view3d};
 
 const VERSION: &str = env!("BK_VERSION_FULL");
 
-#[derive(Default)]
 pub struct App {
     lane: Lane<RapierWorld, ScoreCalculator>,
     clock: FixedStep,
+    follow: FollowCamera,
+    theme: ThemeId,
+    /// Draw the top-down physics view instead of the 3D view (`--debug-view`).
+    debug_view: bool,
     latch: KeyLatch,
     /// The lane drawing of the last frame, where pointer presses count.
     canvas: Option<egui::Rect>,
@@ -25,6 +30,20 @@ pub struct App {
 }
 
 impl App {
+    pub fn new(theme: ThemeId, debug_view: bool) -> Self {
+        Self {
+            lane: Lane::default(),
+            clock: FixedStep::default(),
+            follow: FollowCamera::default(),
+            theme,
+            debug_view,
+            latch: KeyLatch::default(),
+            canvas: None,
+            show_about: false,
+            idle: false,
+        }
+    }
+
     fn run(&mut self, ctx: &egui::Context, command: Command) {
         match command.target() {
             // A command the phase does not allow changes nothing.
@@ -32,8 +51,9 @@ impl App {
                 let _ = lane_commands::execute(command, &mut self.lane);
             }
             CommandTarget::App => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-            // Theme and sound arrive in later milestones.
-            CommandTarget::View | CommandTarget::Sound => {}
+            CommandTarget::View => self.theme = next_theme(self.theme),
+            // Sound arrives in a later milestone.
+            CommandTarget::Sound => {}
         }
     }
 
@@ -126,6 +146,13 @@ impl App {
                     ui.close();
                 }
             });
+            ui.menu_button("View", |ui| {
+                ui.menu_button("Theme", |ui| {
+                    for id in THEMES {
+                        ui.radio_value(&mut self.theme, id, theme(id).label);
+                    }
+                });
+            });
             ui.menu_button("Help", |ui| {
                 if ui.button("About").clicked() {
                     self.show_about = true;
@@ -146,19 +173,28 @@ impl eframe::App for App {
             self.lane.step(fixed_step::DT);
         }
         let snapshot = self.lane.snapshot();
-        self.idle = matches!(snapshot.phase, Phase::Aiming | Phase::GameOver);
+        self.follow.update(&snapshot, elapsed);
+        self.idle =
+            matches!(snapshot.phase, Phase::Aiming | Phase::GameOver) && self.follow.is_home();
         if !self.idle {
             ctx.request_repaint();
         }
 
         egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
         egui::Panel::bottom("status").show(ui, |ui| {
-            ui.label(debug_view::status(&snapshot, self.lane.score_sheet()));
+            let status = debug_view::status(&snapshot, self.lane.score_sheet());
+            ui.label(format!("{status} | Theme {}", theme(self.theme).label));
         });
         egui::CentralPanel::default().show(ui, |ui| {
             debug_view::scoreboard(ui, self.lane.score_sheet());
             debug_view::power_bar(ui, &snapshot);
-            self.canvas = Some(debug_view::lane(ui, &snapshot));
+            self.canvas = Some(if self.debug_view {
+                debug_view::lane(ui, &snapshot)
+            } else {
+                let mut camera = Camera::default();
+                self.follow.apply_to(&mut camera);
+                view3d::show(ui, camera, &scene_adapter::to_scene(&snapshot), self.theme)
+            });
         });
 
         if self.show_about {

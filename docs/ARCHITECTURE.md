@@ -94,10 +94,19 @@ smoke test requests a device with those limits; without an adapter it prints a n
 `render_mode_from_env` reads `BOWLINGBOX_RENDER`: `basic`, in any case, is the only path so far, and
 `render_mode_warning` gives the one line to print for any other value.
 
+The app wires it in four small modules. `scene_adapter` is the one place that turns a lane `Snapshot`
+into a `SceneDescription` (pins sit `PIN_MESH_OFFSET_Y` along their own up axis, aim guide only while
+aiming or charging). `follow_camera` ports the C++ camera rig: home behind the foul line, follows the
+rolling ball, eases back, and lets the window sleep once it is home. `view3d` keeps the renderer in
+egui-wgpu's callback resources and draws it from a paint callback in the central panel. `cli` parses
+`--theme`, `--mute` (reserved) and `--debug-view` with clap and collects the startup warnings, which
+`main` prints once. The window keeps eframe's defaults (no multisampling, no depth buffer).
+
 ## Dependencies
 
 - `bowlingbox-score` has no dependencies, so it builds and tests without a window or a GPU.
-- `bowlingbox` (the app) uses `bowlingbox-lane` for the throw and `bowlingbox-score` for the sheet, and
+- `bowlingbox` (the app) uses `bowlingbox-lane` for the throw, `bowlingbox-score` for the sheet,
+  `bowlingbox-render` for the 3D view, `clap` for the command line, `glam` for the scene types, and
   `eframe` for the window. `eframe` runs with the wgpu renderer and default features off; only `wgpu`,
   `default_fonts`, `wayland`, `x11` and `accesskit` are on. The app also names `winit` to switch on
   `wayland-csd-adwaita`, so GNOME on Wayland gets a title bar.
