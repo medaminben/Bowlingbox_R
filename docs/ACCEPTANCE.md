@@ -10,8 +10,8 @@ them (items 3 and 4) play a whole throw and are ignored in a debug build; `cargo
 or `cargo test --release` runs them.
 
 Machine of the "checked here" runs: Linux (Debian 13), X11, Intel UHD (Comet Lake GT2) with Vulkan,
-release build, `--mute`, a throwaway `XDG_DATA_HOME`. Date: 2026-11-19. Screenshots were taken and
-looked at but are not committed; the manual's captured screenshots come with milestone 8.
+release build, `--mute`, a throwaway `XDG_DATA_HOME`. Date: 2026-11-19. The manual's screenshots are captured
+with `cargo bk manual capture` and committed under `docs/manual/assets/shots/en/`.
 
 ## The list
 

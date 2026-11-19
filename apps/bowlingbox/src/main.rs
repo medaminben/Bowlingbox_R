@@ -1,4 +1,5 @@
 mod app;
+mod capture;
 mod cli;
 mod command;
 mod debug_view;
@@ -35,10 +36,15 @@ fn main() -> eframe::Result {
     let cli = cli::Cli::parse();
     let startup = cli.startup(std::env::var("BOWLINGBOX_RENDER").ok().as_deref());
     let stats = render_stats_from_env(std::env::var("BOWLINGBOX_RENDER_STATS").ok().as_deref());
+    if let Some(reason) = &startup.capture_error {
+        eprintln!("capture failed: {reason}");
+        std::process::exit(1);
+    }
     for warning in &startup.warnings {
         eprintln!("{warning}");
     }
-    let (out, sound_warning) = bowlingbox_audio::open_output();
+    let capturing = startup.capture.is_some();
+    let (out, sound_warning) = capture::audio_output(capturing, bowlingbox_audio::open_output);
     if let Some(warning) = sound_warning {
         eprintln!("{warning}");
     }
@@ -47,7 +53,11 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_title(title)
             .with_app_id("Bowlingbox")
-            .with_inner_size([960.0, 640.0])
+            .with_inner_size(if capturing {
+                capture::WINDOW.map(f32::from)
+            } else {
+                [960.0, 640.0]
+            })
             .with_min_inner_size([800.0, 600.0]),
         renderer: eframe::Renderer::Wgpu,
         // The window starts at its default size; only the sound settings are remembered.
@@ -58,7 +68,9 @@ fn main() -> eframe::Result {
         create_new.device_descriptor =
             Arc::new(move |adapter| view3d::device_descriptor(adapter, stats));
     }
-    eframe::run_native(
+    let outcome = capture::Outcome::default();
+    let capture_outcome = outcome.clone();
+    let window = eframe::run_native(
         title,
         options,
         Box::new(move |cc| {
@@ -70,18 +82,29 @@ fn main() -> eframe::Result {
             app::configure(&cc.egui_ctx);
             view3d::install(render_state, startup.theme, startup.render_mode, stats);
             let stored = settings_store::load(cc.storage);
-            let app = app::App::new(
+            let mut app = app::App::new(
                 startup.theme,
                 startup.debug_view,
                 (stored, startup.mute),
                 startup.screen,
                 out,
             );
+            if let Some(path) = startup.capture.clone() {
+                app = app.with_capture(capture::Run::new(path, capture_outcome));
+            }
             Ok(if stats {
                 Box::new(app::RedrawAlways(app))
             } else {
                 Box::new(app)
             })
         }),
-    )
+    );
+    if capturing {
+        if let Err(reason) = capture::finish(window.map_err(|e| e.to_string()), &outcome) {
+            eprintln!("capture failed: {reason}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+    window
 }
