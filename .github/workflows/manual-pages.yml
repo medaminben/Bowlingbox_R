@@ -44,6 +44,17 @@ jobs:
       - name: Build the manual
         run: cargo bk manual
 
+      # The manual has one language, so the language chooser is an extra click: the start page
+      # sends the visitor straight to that language.
+      - name: Skip the language chooser
+        run: |
+          set -euo pipefail
+          langs="$(find build/manual -mindepth 1 -maxdepth 1 -type d ! -name assets -printf '%f\n')"
+          if [ "$(printf '%s\n' "$langs" | wc -l)" -eq 1 ]; then
+            printf '<!doctype html>\n<meta charset="utf-8">\n<title>User manual</title>\n<meta http-equiv="refresh" content="0; url=%s/index.html">\n<a href="%s/index.html">User manual</a>\n' \
+              "$langs" "$langs" > build/manual/index.html
+          fi
+
       - uses: actions/configure-pages@v5
 
       - uses: actions/upload-pages-artifact@v3
